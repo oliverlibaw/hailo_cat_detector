@@ -1,8 +1,6 @@
 # This project detects cats and triggers a water gun to squirt them. It runs on a Raspberry Pi 5 with a Hailo AI Kit and a four-relay HAT.
 
 import os
-os.environ['QT_QPA_PLATFORM'] = 'xcb'  # Force X11
-# import degirum as dg
 import cv2
 import time
 import numpy as np
@@ -76,34 +74,27 @@ def play_sound():
             print(f"Error playing sound: {e}")
 
 def setup_camera():
-    """Setup camera based on mode"""
+    """Set up the camera with proper error handling"""
     if DEV_MODE:
-        # Use webcam in development mode
         print("Attempting to access webcam...")
         print("Note: On macOS, you may need to grant camera permissions to Terminal/IDE")
         print("If the camera doesn't work, try running this script from Terminal")
         
-        # Try multiple camera indices
-        for camera_index in [0, 1]:
+        # Try different camera indices
+        for i in range(3):  # Try first 3 camera indices
             try:
-                cap = cv2.VideoCapture(camera_index)
+                cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)  # Use AVFoundation backend on macOS
                 if cap.isOpened():
-                    ret, test_frame = cap.read()
-                    if ret and test_frame is not None:
-                        print(f"Successfully opened camera {camera_index}")
-                        return cap
-                    cap.release()
+                    print(f"Successfully opened camera {i}")
+                    return cap
             except Exception as e:
-                print(f"Failed to open camera {camera_index}: {e}")
+                print(f"Failed to open camera {i}: {str(e)}")
+                continue
         
-        raise Exception("Could not open any webcam. Please check camera permissions.")
+        raise Exception("Could not open webcam")
     else:
-        # Use Pi camera in production mode
-        picam2 = Picamera2()
-        camera_config = picam2.create_preview_configuration(main={"format": 'RGB888', "size": MODEL_INPUT_SIZE})
-        picam2.configure(camera_config)
-        picam2.start()
-        return picam2
+        # Production mode camera setup
+        return None  # Will be implemented later
 
 def cleanup_camera(camera):
     """Cleanup camera based on mode"""
@@ -198,48 +189,44 @@ def draw_overlay(frame, relative_position=None):
 
 def load_model():
     """Load the AI model with proper error handling"""
-    model_path = 'squirrel_best_yolov8n_12-3-2024.pt'
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file not found: {model_path}")
-    
     try:
-        print(f"Loading PyTorch model from {model_path}...")
-        print(f"Model file size: {os.path.getsize(model_path) / (1024*1024):.2f} MB")
+        if DEV_MODE:
+            print("Development mode: Loading pretrained YOLOv8n model...")
+            model = YOLO('yolov8n.pt')  # Load pretrained YOLOv8n model
+            print("Successfully loaded pretrained YOLOv8n model")
+        else:
+            print("Loading PyTorch model from cats_jan_2025.pt...")
+            model_path = 'cats_jan_2025.pt'
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+            
+            # Try loading as YOLOv8 model first
+            try:
+                print("Attempting to load as YOLOv8 model...")
+                model = YOLO(model_path)
+                print("Successfully loaded as YOLOv8 model")
+            except Exception as e:
+                print(f"Failed to load as YOLOv8 model: {str(e)}")
+                print("Attempting to load as PyTorch model...")
+                # Fallback to loading as PyTorch model
+                model = torch.load(model_path)
+                print("Successfully loaded as PyTorch model")
         
-        # Try loading as a YOLOv8 model
-        try:
-            # First try downloading a base YOLOv8n model
-            print("Downloading base YOLOv8n model...")
-            model = YOLO('yolov8n.pt')
-            print("Base model loaded, now loading custom weights...")
-            
-            # Load custom weights
-            state_dict = torch.load(model_path, map_location='cpu')
-            if isinstance(state_dict, dict):
-                if 'model' in state_dict:
-                    state_dict = state_dict['model']
-                elif 'state_dict' in state_dict:
-                    state_dict = state_dict['state_dict']
-            
-            # Load the weights into the model
-            model.model.load_state_dict(state_dict)
-            print("Custom weights loaded successfully")
-            
-        except Exception as e:
-            print(f"Failed to load model: {e}")
-            raise
+        # Print model information
+        if DEV_MODE:
+            print(f"Model loaded: {model.__class__.__name__}")
+            print(f"Model size: {os.path.getsize('yolov8n.pt') / (1024*1024):.2f} MB")
+        else:
+            print(f"Model loaded: {type(model).__name__}")
+            print(f"Model size: {os.path.getsize(model_path) / (1024*1024):.2f} MB")
         
-        # Verify model loaded correctly
-        if model is None:
-            raise Exception("Model loaded as None")
-            
-        print("Model loaded successfully!")
         return model
     except Exception as e:
+        print(f"Failed to load model: {str(e)}")
+        print("Detailed error traceback:")
         import traceback
-        print(f"Detailed error traceback:")
         traceback.print_exc()
-        raise Exception(f"Failed to load model: {str(e)}")
+        raise
 
 try:
     # Load AI model with proper error handling
