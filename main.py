@@ -10,7 +10,7 @@ from ultralytics import YOLO
 import pygame
 
 # Development mode flag - set to True when developing on MacBook
-DEV_MODE = True
+DEV_MODE = False  # Set to False for Raspberry Pi deployment
 
 # Import Raspberry Pi specific modules only in production mode
 if not DEV_MODE:
