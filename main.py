@@ -38,14 +38,24 @@ CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of c
 RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
 RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
 
+# Cat class names
+CAT_CLASSES = {
+    0: "Gary",
+    1: "George",
+    2: "Fred"
+}
+
 # Colors for visualization
 COLORS = {
-    'green': (0, 255, 0),
-    'red': (0, 0, 255),
-    'blue': (255, 0, 0),
+    'gary': (0, 255, 0),     # Green for Gary
+    'george': (255, 0, 0),   # Blue for George
+    'fred': (0, 0, 255),     # Red for Fred
     'white': (255, 255, 255),
     'black': (0, 0, 0),
-    'yellow': (0, 255, 255)
+    'yellow': (0, 255, 255),
+    'red': (0, 0, 255),      # Red for threshold lines and warnings
+    'green': (0, 255, 0),    # Green for FPS display
+    'unknown': (255, 255, 255)  # White for unknown cats
 }
 
 # Global variables for relay control
@@ -191,9 +201,13 @@ def load_model():
     """Load the AI model with proper error handling"""
     try:
         if DEV_MODE:
-            print("Development mode: Loading pretrained YOLOv8n model...")
-            model = YOLO('yolov8n.pt')  # Load pretrained YOLOv8n model
-            print("Successfully loaded pretrained YOLOv8n model")
+            print("Development mode: Loading custom YOLOv8n model for cat detection...")
+            model_path = 'yolov8n_cats.pt'  # Your custom model
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+            
+            model = YOLO(model_path)
+            print("Successfully loaded custom cat detection model")
         else:
             print("Loading PyTorch model from cats_jan_2025.pt...")
             model_path = 'cats_jan_2025.pt'
@@ -215,7 +229,8 @@ def load_model():
         # Print model information
         if DEV_MODE:
             print(f"Model loaded: {model.__class__.__name__}")
-            print(f"Model size: {os.path.getsize('yolov8n.pt') / (1024*1024):.2f} MB")
+            print(f"Model size: {os.path.getsize('yolov8n_cats.pt') / (1024*1024):.2f} MB")
+            print("Detecting cats: Gary, George, and Fred")
         else:
             print(f"Model loaded: {type(model).__name__}")
             print(f"Model size: {os.path.getsize(model_path) / (1024*1024):.2f} MB")
@@ -261,12 +276,17 @@ try:
             for box in results.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 score = float(box.conf[0])
+                class_id = int(box.cls[0])
+                
+                # Get cat name and color
+                cat_name = CAT_CLASSES.get(class_id, "Unknown")
+                color = COLORS.get(cat_name.lower(), COLORS['unknown'])
                 
                 # Draw bounding box
-                cv2.rectangle(display_frame, (x1, y1), (x2, y2), COLORS['green'], 2)
+                cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
                 
                 # Add label and confidence
-                label_text = f"cat: {score:.2f}"
+                label_text = f"{cat_name}: {score:.2f}"
                 text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
                 
                 cv2.rectangle(display_frame, 
