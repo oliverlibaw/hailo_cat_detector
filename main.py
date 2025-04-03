@@ -49,12 +49,16 @@ token = ""
 model_name = "yolov8n_cats"  # Your custom YOLOv8n model
 
 # Configuration
-DETECTION_THRESHOLD = 0.1  # Very low confidence threshold to detect more objects
+DETECTION_THRESHOLD = 0.25  # Increased from 0.1 to 0.25 for better quality detections
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv8n input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
 RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
 RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
 INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+FPS = 25
+DEBUG_MODE = True
 
 # Cat class names
 CAT_CLASSES = {
@@ -112,6 +116,10 @@ last_action_time = 0
 SOUND_FILES = [
     'cat1.wav', 'cat2.wav', 'cat3.wav', 'cat4.wav', 'cat5.wav', 'cat6.wav'
 ]
+
+# Define GPIO pins for relay control
+RELAY_PIN_LEFT = RELAY_PINS['left']
+RELAY_PIN_RIGHT = RELAY_PINS['right']
 
 def setup_sound():
     """Initialize pygame mixer for sound effects"""
@@ -1027,123 +1035,6 @@ def test_model_on_sample(model):
         import traceback
         traceback.print_exc()
 
-def main():
-    """Main function"""
-    try:
-        print_header()
-        
-        # Test DeGirum and Hailo setup first
-        test_degirum_setup()
-        
-        # Load AI model with proper error handling
-        model = load_model()
-        
-        if model is None:
-            print("Primary model loading failed. Trying fallback model...")
-            model = load_fallback_model()
-            
-        if model is None:
-            print("ERROR: Failed to load any model. Check the error messages above for details.")
-            print("Check that the DeGirum package is installed correctly and Hailo accelerator is connected.")
-            print("Exiting program.")
-            sys.exit(1)
-
-        # Configure camera
-        camera = setup_camera()
-        
-        # Test model on a sample image
-        if os.path.exists("sample_cat.jpg"):
-            print("Testing model on sample image...")
-            test_model_on_sample(model)
-        
-        # Initialize GPIO if not in dev mode
-        if not DEV_MODE:
-            init_gpio()
-        
-        # Print configuration
-        print_config()
-        
-        # Initialize variables for smoothing detections
-        last_valid_detections = []
-        no_detection_frames = 0
-        max_no_detection_frames = 3  # Number of frames to keep using last detection
-        
-        # Main loop
-        try:
-            fps_counter = FPSCounter()
-            while True:
-                # Read frame from camera
-                frame = read_frame(camera)
-                
-                if frame is None:
-                    print("Failed to capture frame")
-                    time.sleep(0.1)
-                    continue
-                
-                # Run detection on the frame
-                t = time.time()
-                print(f"Running inference at t={t}s")
-                
-                # Perform inference
-                if DEV_MODE:
-                    results = model(frame, conf=DETECTION_THRESHOLD)
-                else:
-                    # Use Degirum's predict_batch method which returns a generator
-                    results_generator = model.predict_batch([frame])
-                    results = next(results_generator)
-                
-                # Process detection results
-                print(f"Got result type: {type(results)}")
-                
-                # Process detections
-                detections = process_detections(frame, results)
-                
-                # Apply detection smoothing
-                if not detections:
-                    no_detection_frames += 1
-                    if no_detection_frames <= max_no_detection_frames and last_valid_detections:
-                        print(f"No detections in this frame, using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
-                        detections = last_valid_detections
-                    else:
-                        print("No detections found and no recent valid detections to use")
-                else:
-                    # We have valid detections, reset counter and save for future use
-                    no_detection_frames = 0
-                    last_valid_detections = detections.copy()
-                
-                # Get FPS
-                fps = fps_counter.get_fps()
-                
-                # Process actions based on detections
-                process_actions(frame, detections, fps)
-                
-                # Sleep to maintain desired FPS
-                time.sleep(1.0 / FPS)
-                
-        except KeyboardInterrupt:
-            print("Keyboard interrupt detected. Exiting...")
-            
-    except Exception as e:
-        print(f"Error in main loop: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
-    finally:
-        # Clean up resources
-        cleanup()
-        print("Program terminated")
-
-try:
-    main()
-except Exception as e:
-    print(f"Error: {e}")
-    if 'camera' in locals():
-        cleanup_camera(camera)
-    if DEV_MODE:
-        pygame.mixer.quit()
-    
-print("Resources cleaned up")
-
 def read_frame(camera):
     """Read a frame from the camera"""
     try:
@@ -1268,3 +1159,120 @@ def print_header():
     else:
         print(f"Running on platform: {sys.platform}")
     print("")
+
+def main():
+    """Main function"""
+    try:
+        print_header()
+        
+        # Test DeGirum and Hailo setup first
+        test_degirum_setup()
+        
+        # Load AI model with proper error handling
+        model = load_model()
+        
+        if model is None:
+            print("Primary model loading failed. Trying fallback model...")
+            model = load_fallback_model()
+            
+        if model is None:
+            print("ERROR: Failed to load any model. Check the error messages above for details.")
+            print("Check that the DeGirum package is installed correctly and Hailo accelerator is connected.")
+            print("Exiting program.")
+            sys.exit(1)
+
+        # Configure camera
+        camera = setup_camera()
+        
+        # Test model on a sample image
+        if os.path.exists("sample_cat.jpg"):
+            print("Testing model on sample image...")
+            test_model_on_sample(model)
+        
+        # Initialize GPIO if not in dev mode
+        if not DEV_MODE:
+            init_gpio()
+        
+        # Print configuration
+        print_config()
+        
+        # Initialize variables for smoothing detections
+        last_valid_detections = []
+        no_detection_frames = 0
+        max_no_detection_frames = 3  # Number of frames to keep using last detection
+        
+        # Main loop
+        try:
+            fps_counter = FPSCounter()
+            while True:
+                # Read frame from camera
+                frame = read_frame(camera)
+                
+                if frame is None:
+                    print("Failed to capture frame")
+                    time.sleep(0.1)
+                    continue
+                
+                # Run detection on the frame
+                t = time.time()
+                print(f"Running inference at t={t}s")
+                
+                # Perform inference
+                if DEV_MODE:
+                    results = model(frame, conf=DETECTION_THRESHOLD)
+                else:
+                    # Use Degirum's predict_batch method which returns a generator
+                    results_generator = model.predict_batch([frame])
+                    results = next(results_generator)
+                
+                # Process detection results
+                print(f"Got result type: {type(results)}")
+                
+                # Process detections
+                detections = process_detections(frame, results)
+                
+                # Apply detection smoothing
+                if not detections:
+                    no_detection_frames += 1
+                    if no_detection_frames <= max_no_detection_frames and last_valid_detections:
+                        print(f"No detections in this frame, using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
+                        detections = last_valid_detections
+                    else:
+                        print("No detections found and no recent valid detections to use")
+                else:
+                    # We have valid detections, reset counter and save for future use
+                    no_detection_frames = 0
+                    last_valid_detections = detections.copy()
+                
+                # Get FPS
+                fps = fps_counter.get_fps()
+                
+                # Process actions based on detections
+                process_actions(frame, detections, fps)
+                
+                # Sleep to maintain desired FPS
+                time.sleep(1.0 / FPS)
+                
+        except KeyboardInterrupt:
+            print("Keyboard interrupt detected. Exiting...")
+            
+    except Exception as e:
+        print(f"Error in main loop: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        # Clean up resources
+        cleanup()
+        print("Program terminated")
+
+try:
+    main()
+except Exception as e:
+    print(f"Error: {e}")
+    if 'camera' in locals():
+        cleanup_camera(camera)
+    if DEV_MODE:
+        pygame.mixer.quit()
+    
+print("Resources cleaned up")
