@@ -57,8 +57,10 @@ RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
 INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-FPS = 25
-DEBUG_MODE = True
+FPS = 15  # Reduced from 25 to 15 for better performance
+DEBUG_MODE = False  # Turn off debug mode to reduce console output
+VERBOSE_OUTPUT = False  # Controls detailed terminal output
+SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
 
 # Cat class names
 CAT_CLASSES = {
@@ -127,6 +129,7 @@ COLOR_NAMES = {
 last_center_activation = 0
 last_action = None
 last_action_time = 0
+last_valid_overlay = None  # Stores the last valid image overlay from the model
 
 # Sound effects for development mode
 SOUND_FILES = [
@@ -256,15 +259,8 @@ def process_detections(frame, results):
         try:
             # Check if there are results in the standard results list
             if hasattr(results, 'results') and results.results:
-                print(f"Processing {len(results.results)} detections")
-                
-                # For debug: Print the first result structure
-                if len(results.results) > 0:
-                    first_result = results.results[0]
-                    print(f"First detection type: {type(first_result)}")
-                    if isinstance(first_result, dict):
-                        for key, value in first_result.items():
-                            print(f"  {key}: {value}")
+                if VERBOSE_OUTPUT:
+                    print(f"Processing {len(results.results)} detections")
                 
                 # Process each detection
                 for detection in results.results:
@@ -282,12 +278,11 @@ def process_detections(frame, results):
                                     # Only process cat class (15) or other specified classes
                                     if class_id not in CLASSES_TO_DETECT:
                                         continue
-                                    class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
                                 else:
                                     class_id = int(detection.get('category_id', 0))
-                                    class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
                                 
-                                print(f"Detection: {class_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
+                                if VERBOSE_OUTPUT:
+                                    print(f"Detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
                                 detections.append((x1, y1, x2, y2, score, class_id))
                                 continue
                         
@@ -306,159 +301,70 @@ def process_detections(frame, results):
                                 x2 = int(detection.bbox[2])
                                 y2 = int(detection.bbox[3])
                             else:
-                                print(f"Unknown bbox format: {detection.bbox}")
                                 continue
                                 
                             # Get score and class ID
-                            if hasattr(detection, 'confidence'):
-                                score = float(detection.confidence)
-                            elif hasattr(detection, 'score'):
-                                score = float(detection.score)
-                            else:
-                                score = 0.0
-                                
-                            if hasattr(detection, 'class_id'):
-                                class_id = int(detection.class_id)
-                            elif hasattr(detection, 'category_id'):
-                                class_id = int(detection.category_id)
-                            else:
-                                class_id = 0
+                            score = getattr(detection, 'score', getattr(detection, 'confidence', 0.3))
+                            class_id = getattr(detection, 'class_id', getattr(detection, 'category_id', 15))
                                 
                             # For COCO model, only process specified classes
                             if USE_COCO_MODEL and class_id not in CLASSES_TO_DETECT:
-                                continue
+                                class_id = 15  # Treat detections as cats if using COCO model
                                 
-                            # Get the class name based on the model
-                            if USE_COCO_MODEL:
-                                class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
-                            else:
-                                class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-                                
-                            print(f"Detection: {class_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
                             detections.append((x1, y1, x2, y2, score, class_id))
-                            continue
-                            
                     except Exception as e:
-                        print(f"Error processing detection: {e}")
-                        import traceback
-                        traceback.print_exc()
+                        if VERBOSE_OUTPUT:
+                            print(f"Error processing detection: {e}")
             
-            # If we still have no detections but have an image_overlay, try to use that
+            # If we have no detections but have an image_overlay, extract detections from it
             if len(detections) == 0 and hasattr(results, 'image_overlay') and results.image_overlay is not None:
-                print("Using image_overlay for detection information")
-                
-                # Create a copy of the primary frame
-                debug_frame = frame.copy()
-                
-                # Save both frames for comparison
-                cv2.imwrite("debug_original_frame.jpg", frame)
-                
-                if isinstance(results.image_overlay, np.ndarray):
-                    # Save the raw overlay from the model
-                    cv2.imwrite("debug_model_overlay.jpg", results.image_overlay)
+                # Create a copy of the frame for using OpenCV contour detection
+                overlay = results.image_overlay
+
+                # Check if the overlay has proper dimensions and looks like a valid image
+                if isinstance(overlay, np.ndarray) and overlay.shape == frame.shape:                    
+                    # Analyze difference between original frame and overlay
+                    frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    overlay_gray = cv2.cvtColor(overlay, cv2.COLOR_BGR2GRAY)
                     
-                    # If the model has detections, they should be visible in the overlay
-                    # Analyze difference between original frame and overlay to find bounding boxes
-                    if frame.shape == results.image_overlay.shape:
-                        # Convert both to grayscale for comparison
-                        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                        overlay_gray = cv2.cvtColor(results.image_overlay, cv2.COLOR_BGR2GRAY)
-                        
-                        # Calculate absolute difference
-                        diff = cv2.absdiff(frame_gray, overlay_gray)
-                        cv2.imwrite("debug_frame_diff.jpg", diff)
-                        
-                        # Threshold to find areas of difference (where boxes and text might be)
-                        _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
-                        cv2.imwrite("debug_threshold.jpg", thresh)
-                        
-                        # Find contours in the difference image
-                        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        
-                        # Filter and process contours to find bounding boxes
-                        potential_boxes = []
-                        for i, contour in enumerate(contours):
-                            # Filter out small contours that might be noise
-                            area = cv2.contourArea(contour)
-                            if area > 200:  # Lower threshold to catch smaller boxes
-                                x, y, w, h = cv2.boundingRect(contour)
+                    # Calculate absolute difference
+                    diff = cv2.absdiff(frame_gray, overlay_gray)
+                    
+                    # Threshold to find areas of difference (where boxes might be)
+                    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+                    
+                    # Find contours in the difference image
+                    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    
+                    # Process contours to find bounding boxes
+                    for contour in contours:
+                        # Filter out small contours that might be noise
+                        area = cv2.contourArea(contour)
+                        if area > 500:  # Minimum area threshold
+                            x, y, w, h = cv2.boundingRect(contour)
+                            
+                            # Filter by aspect ratio to avoid UI elements
+                            aspect_ratio = float(w) / h if h > 0 else 0
+                            if 0.25 < aspect_ratio < 4.0 and w > 30 and h > 30:
+                                # Create a detection entry
+                                x1, y1, x2, y2 = x, y, x+w, y+h
+                                score = 0.5  # Assumed score
+                                class_id = 15  # Cat class ID
                                 
-                                # Filter out likely non-bounding box contours
-                                aspect_ratio = float(w) / h if h > 0 else 0
-                                
-                                # Only keep contours that might be bounding boxes (reasonable aspect ratio)
-                                if 0.2 < aspect_ratio < 5.0 and w > 20 and h > 20:
-                                    potential_boxes.append((x, y, w, h, area))
-                        
-                        # Merge overlapping boxes to find complete bounding boxes
-                        merged_boxes = []
-                        
-                        # Sort by area (largest first)
-                        potential_boxes.sort(key=lambda box: box[4], reverse=True)
-                        
-                        # Take the top 5 largest contours that might be bounding boxes
-                        for i, box in enumerate(potential_boxes[:5]):
-                            x, y, w, h, area = box
-                            
-                            # Create a synthetic detection with assumed values
-                            # Since we don't have class or score info, use defaults
-                            x1, y1, x2, y2 = x, y, x+w, y+h
-                            score = 0.5  # Assumed score for now
-                            
-                            # If using COCO model, default to cat class
-                            if USE_COCO_MODEL:
-                                class_id = 15  # Always use cat ID (15) for COCO model
-                            else:
-                                class_id = 0  # Default class from custom model
-                            
-                            print(f"Potential detection from overlay: bbox={x1},{y1},{x2},{y2}, area={area}")
-                            
-                            # Draw on debug frame with different colors to distinguish boxes
-                            color = COLORS[class_id % len(COLORS)]  # Use the COLORS array
-                            cv2.rectangle(debug_frame, (x1, y1), (x2, y2), color, 2)
-                            cv2.putText(debug_frame, f"#{i}: {area}", (x1, y1-10), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                            
-                            # Add to detections if it's a large enough area (more likely to be a real detection)
-                            if area > 1000:  # Higher threshold for final detections
                                 detections.append((x1, y1, x2, y2, score, class_id))
-                                merged_boxes.append((x1, y1, x2, y2))
-                        
-                        # Save the debug frame with extracted boxes
-                        cv2.imwrite("debug_extracted_boxes.jpg", debug_frame)
-                        
-                        # Create another debug image with the overlay side by side with our boxes
-                        if results.image_overlay.shape == debug_frame.shape:
-                            comparison = np.hstack((results.image_overlay, debug_frame))
-                            cv2.imwrite("debug_comparison.jpg", comparison)
                 
-                # If we found any detections, use them
-                if len(detections) > 0:
-                    print(f"Extracted {len(detections)} detections from image overlay")
-                else:
-                    print("Could not extract detections from image overlay")
-                    
-                    # Last resort - use the overlay directly for display
-                    # This won't give us detection coordinates, but at least shows what the model sees
-                    print("Using overlay directly for display")
-            
-            # Last resort - dump everything about the results object
-            if len(detections) == 0:
-                print("No detections found. Results dump:")
-                for attr in dir(results):
-                    if not attr.startswith('__'):
-                        try:
-                            value = getattr(results, attr)
-                            print(f"  {attr}: {value}")
-                        except:
-                            print(f"  {attr}: <error accessing>")
+                # Just use the whole image as a valid overlay
+                if len(detections) == 0:
+                    # Store the overlay for display
+                    global last_valid_overlay
+                    last_valid_overlay = overlay
         
         except Exception as e:
-            print(f"Error in process_detections: {e}")
-            import traceback
-            traceback.print_exc()
+            if VERBOSE_OUTPUT:
+                print(f"Error processing detection results: {e}")
     
-    print(f"Returning {len(detections)} processed detections")
+    if VERBOSE_OUTPUT:
+        print(f"Returning {len(detections)} processed detections")
     return detections
 
 def activate_relay(pin, duration=0.1):
@@ -927,16 +833,14 @@ def process_actions(frame, detections, fps):
     cv2.line(annotated_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
     
     # Add header with FPS
-    fps_text = f"FPS: {fps:.2f}"
+    fps_text = f"FPS: {fps:.1f}"
     cv2.rectangle(annotated_frame, (0, 0), (200, 40), (0, 0, 0), -1)
     cv2.putText(annotated_frame, fps_text, (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
     
     if len(detections) > 0:
-        print(f"Detected {len(detections)} objects")
-        
-        # Save detection frame
-        detection_filename = f"detection_{int(time.time())}.jpg"
+        if VERBOSE_OUTPUT:
+            print(f"Detected {len(detections)} objects")
         
         # Process each detection
         for detection in detections:
@@ -948,8 +852,8 @@ def process_actions(frame, detections, fps):
             else:
                 class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
             
-            # Print detection details
-            print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
+            if VERBOSE_OUTPUT:
+                print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
             
             # Draw detection on the annotated frame
             color_index = class_id % len(COLORS)
@@ -1012,11 +916,16 @@ def process_actions(frame, detections, fps):
             pos_text = f"Position: {relative_position:.2f}"
             cv2.putText(annotated_frame, pos_text, (10, height - 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Save the annotated frame
-        cv2.imwrite(detection_filename, annotated_frame)
-        print(f"Saved frame to {detection_filename}")
-        print(f"Saved annotated detection image to {detection_filename}")
+    else:
+        # Turn off relays if no detections
+        if not DEV_MODE:
+            set_relay(RELAY_PIN_LEFT, False)
+            set_relay(RELAY_PIN_RIGHT, False)
+    
+    # Add timestamp
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    cv2.putText(annotated_frame, timestamp, (width - 250, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     return annotated_frame
 
@@ -1136,49 +1045,6 @@ def read_frame(camera):
         print(f"Error reading frame: {e}")
         return None
 
-def setup_camera():
-    """Setup camera for capture"""
-    if DEV_MODE:
-        print("Setting up camera for development mode...")
-        camera = cv2.VideoCapture(0)
-        
-        # Set camera resolution
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-        
-        # Check if camera opened successfully
-        if not camera.isOpened():
-            print("Error: Could not open camera.")
-            sys.exit(1)
-        
-        print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
-        return camera
-    else:
-        print("Setting up Pi camera...")
-        try:
-            from picamera2 import Picamera2
-            
-            # Create and configure Picamera2
-            picam2 = Picamera2()
-            
-            # Configure camera with preview configuration
-            camera_config = picam2.create_preview_configuration(
-                main={"format": "RGB888", "size": (FRAME_WIDTH, FRAME_HEIGHT)}
-            )
-            
-            # Apply the configuration
-            picam2.configure(camera_config)
-            
-            # Start the camera
-            picam2.start()
-            
-            print(f"Pi camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
-            return picam2
-        except Exception as e:
-            print(f"Error setting up Pi camera: {e}")
-            print("Please check that the camera is properly connected and enabled")
-            raise
-
 def init_gpio():
     """Initialize GPIO pins for relay control"""
     try:
@@ -1278,7 +1144,8 @@ def main():
         print_header()
         
         # Test DeGirum and Hailo setup first
-        test_degirum_setup()
+        if not DEV_MODE:
+            test_degirum_setup()
         
         # Load AI model with proper error handling
         model = load_model()
@@ -1296,9 +1163,8 @@ def main():
         # Configure camera
         camera = setup_camera()
         
-        # Test model on a sample image
-        if os.path.exists("sample_cat.jpg"):
-            print("Testing model on sample image...")
+        # Test model on a sample image if it exists
+        if os.path.exists("sample_cat.jpg") and not DEV_MODE:
             test_model_on_sample(model)
         
         # Initialize GPIO if not in dev mode
@@ -1311,63 +1177,84 @@ def main():
         # Initialize variables for smoothing detections
         last_valid_detections = []
         no_detection_frames = 0
-        max_no_detection_frames = 3  # Number of frames to keep using last detection
+        max_no_detection_frames = 5  # Keep using last detection for more frames
+        
+        # Track performance metrics
+        fps_counter = FPSCounter()
+        frame_count = 0
+        last_fps_print = time.time()
         
         # Main loop
-        try:
-            fps_counter = FPSCounter()
-            while True:
-                # Read frame from camera
-                frame = read_frame(camera)
-                
-                if frame is None:
-                    print("Failed to capture frame")
-                    time.sleep(0.1)
-                    continue
-                
-                # Run detection on the frame
-                t = time.time()
-                print(f"Running inference at t={t}s")
-                
+        while True:
+            frame_start_time = time.time()
+            
+            # Read frame from camera
+            frame = read_frame(camera)
+            
+            if frame is None:
+                time.sleep(0.1)
+                continue
+            
+            # Only run inference every other frame to improve frame rate
+            frame_count += 1
+            should_run_inference = (frame_count % 2 == 0)
+            
+            if should_run_inference:
                 # Perform inference
                 if DEV_MODE:
                     results = model(frame, conf=DETECTION_THRESHOLD)
                 else:
-                    # Use Degirum's predict_batch method which returns a generator
+                    # Use Degirum's predict_batch method
                     results_generator = model.predict_batch([frame])
                     results = next(results_generator)
                 
                 # Process detection results
-                print(f"Got result type: {type(results)}")
-                
-                # Process detections
                 detections = process_detections(frame, results)
                 
                 # Apply detection smoothing
                 if not detections:
                     no_detection_frames += 1
                     if no_detection_frames <= max_no_detection_frames and last_valid_detections:
-                        print(f"No detections in this frame, using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
+                        if VERBOSE_OUTPUT:
+                            print(f"Using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
                         detections = last_valid_detections
-                    else:
-                        print("No detections found and no recent valid detections to use")
                 else:
                     # We have valid detections, reset counter and save for future use
                     no_detection_frames = 0
                     last_valid_detections = detections.copy()
-                
-                # Get FPS
-                fps = fps_counter.get_fps()
-                
-                # Process actions based on detections
-                process_actions(frame, detections, fps)
-                
-                # Sleep to maintain desired FPS
-                time.sleep(1.0 / FPS)
-                
-        except KeyboardInterrupt:
-            print("Keyboard interrupt detected. Exiting...")
+            else:
+                # Use previous detections on frames where we skip inference
+                detections = last_valid_detections
             
+            # Get FPS
+            fps = fps_counter.get_fps()
+            
+            # Process actions based on detections (output to relays)
+            processed_frame = process_actions(frame, detections, fps)
+            
+            # Only save images if we have detections or if save every frame is enabled
+            has_detections = len(detections) > 0
+            if has_detections or SAVE_EVERY_FRAME:
+                timestamp = int(time.time())
+                # Save processed frame every 10th frame or on detection
+                if has_detections or (frame_count % 10 == 0):
+                    cv2.imwrite(f"latest_frame_{timestamp}.jpg", processed_frame)
+            
+            # Print FPS periodically
+            current_time = time.time()
+            if current_time - last_fps_print >= 5.0:  # Print every 5 seconds
+                print(f"Current FPS: {fps:.1f}")
+                last_fps_print = current_time
+            
+            # Calculate time spent on this frame and sleep if needed
+            frame_time = time.time() - frame_start_time
+            sleep_time = max(0, (1.0 / FPS) - frame_time)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            
+    except KeyboardInterrupt:
+        print("Keyboard interrupt detected. Exiting...")
+        
     except Exception as e:
         print(f"Error in main loop: {str(e)}")
         import traceback
