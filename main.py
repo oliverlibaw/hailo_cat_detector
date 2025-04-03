@@ -187,9 +187,8 @@ def process_detections(frame, results):
                 class_id = int(box.cls[0])
                 detections.append((x1, y1, x2, y2, score, class_id))
     else:
-        # Process Degirum results
-        # results is a DetectionResults object
-        for detection in results.results:  # Access the results attribute
+        # Process Degirum results - simpler approach
+        for detection in results:
             # Get bounding box coordinates
             x1 = int(detection.bbox[0])
             y1 = int(detection.bbox[1])
