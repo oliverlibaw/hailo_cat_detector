@@ -14,22 +14,12 @@ import sys
 # Development mode flag - set to True when developing on MacBook
 DEV_MODE = False  # Set to False for Raspberry Pi deployment
 
+# Print the version of OpenCV being used
+print(f"OpenCV version: {cv2.__version__}")
+
 # Check if running in headless mode (without display)
-HEADLESS_MODE = os.environ.get('DISPLAY', '') == ''
-if HEADLESS_MODE:
-    print("Running in headless mode - no display window will be shown")
-else:
-    print("Running with display - window should be shown")
-    # Initialize X11 window system for OpenCV
-    try:
-        cv2.namedWindow("Object Detection", cv2.WINDOW_NORMAL)
-        cv2.moveWindow("Object Detection", 0, 0)
-        cv2.resizeWindow("Object Detection", 640, 640)
-        print("OpenCV window created successfully")
-    except Exception as e:
-        print(f"WARNING: Failed to create OpenCV window: {e}")
-        print("Switching to headless mode")
-        HEADLESS_MODE = True
+HEADLESS_MODE = True  # Always run in headless mode for now
+print("Running in headless mode - terminal output only")
 
 # Import Raspberry Pi specific modules only in production mode
 if not DEV_MODE:
@@ -188,11 +178,8 @@ def get_frame(camera):
             frame = camera.capture_array()
             # Convert from RGB to BGR for OpenCV
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            print(f"DEBUG: Frame shape: {frame.shape}, min: {np.min(frame)}, max: {np.max(frame)}")
-            # Save a frame periodically to check if it's capturing correctly
-            if time.time() % 10 < 0.5:  # Save roughly every 10 seconds
-                cv2.imwrite("debug_frame.jpg", frame)
-                print("DEBUG: Saved frame to debug_frame.jpg")
+            # Always resize the frame to the model input size
+            frame = cv2.resize(frame, MODEL_INPUT_SIZE)
             return frame
         except Exception as e:
             print(f"Failed to capture frame from Pi camera: {e}")
@@ -201,7 +188,6 @@ def get_frame(camera):
 def process_detections(frame, results):
     """Process detection results and return detections list"""
     detections = []
-    print(f"DEBUG: Processing detections, result type: {type(results)}")
     
     if DEV_MODE:
         for result in results:
@@ -212,17 +198,12 @@ def process_detections(frame, results):
                 detections.append((x1, y1, x2, y2, score, class_id))
     else:
         # Process Degirum results
-        print(f"DEBUG: Degirum result dir: {dir(results)}")
-        
-        # Try different ways to access detections
         try:
             if hasattr(results, 'results') and results.results:
-                print(f"DEBUG: Found 'results' attribute with {len(results.results)} items")
+                print(f"Processing {len(results.results)} detections")
                 # Process results attribute
                 for detection in results.results:
                     try:
-                        print(f"DEBUG: Result item type: {type(detection)}, dir: {dir(detection)}")
-                        
                         # Extract bounding box, score and class ID based on what's available
                         if hasattr(detection, 'bbox'):
                             # If bbox is an object
@@ -254,17 +235,13 @@ def process_detections(frame, results):
                                 class_id = 0
                                 
                             detections.append((x1, y1, x2, y2, score, class_id))
-                            print(f"DEBUG: Added detection: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score}, class={class_id}")
                     except Exception as e:
-                        print(f"DEBUG: Error processing detection: {e}")
+                        print(f"Error processing detection: {e}")
                         
             elif hasattr(results, 'detections'):
-                print(f"DEBUG: Found 'detections' attribute with {len(results.detections)} items")
-                # Iterate through detections if available
                 for detection in results.detections:
                     try:
                         # Get bounding box coordinates
-                        print(f"DEBUG: Detection dir: {dir(detection)}")
                         x1 = int(detection.bbox.x1)
                         y1 = int(detection.bbox.y1)
                         x2 = int(detection.bbox.x2)
@@ -275,13 +252,11 @@ def process_detections(frame, results):
                         class_id = int(detection.class_id)
                         
                         detections.append((x1, y1, x2, y2, score, class_id))
-                        print(f"DEBUG: Added detection: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score}, class={class_id}")
                     except Exception as e:
-                        print(f"DEBUG: Error processing detection: {e}")
+                        print(f"Error processing detection: {e}")
             
             # Try yet another method
             elif hasattr(results, 'bboxes'):
-                print(f"DEBUG: Found 'bboxes' attribute")
                 for i in range(len(results.bboxes)):
                     bbox = results.bboxes[i]
                     score = results.scores[i]
@@ -290,9 +265,8 @@ def process_detections(frame, results):
                     detections.append((x1, y1, x2, y2, score, class_id))
         
         except Exception as e:
-            print(f"DEBUG: Error in process_detections: {e}")
+            print(f"Error in process_detections: {e}")
     
-    print(f"DEBUG: Returning {len(detections)} detections")
     return detections
 
 def activate_relay(pin, duration=0.1):
@@ -404,28 +378,14 @@ def signal_handler(sig, frame):
 # Register signal handler
 signal.signal(signal.SIGINT, signal_handler)
 
-def show_frame(frame, title="Object Detection"):
-    """Safely display a frame or save it in headless mode"""
-    # Always save frame periodically for debugging
-    if time.time() % 5 < 0.2:  # Save roughly every 5 seconds
-        cv2.imwrite("latest_frame.jpg", frame)
-        print("DEBUG: Saved latest frame to latest_frame.jpg")
-        
-    if HEADLESS_MODE:
-        return False
-    
+def save_frame(frame, filename="latest_frame.jpg"):
+    """Save a frame to disk for debugging"""
     try:
-        # Use non-blocking display
-        print("DEBUG: Showing frame in window")
-        cv2.imshow(title, frame)
-        print("DEBUG: Frame displayed successfully")
+        cv2.imwrite(filename, frame)
+        print(f"Saved frame to {filename}")
         return True
     except Exception as e:
-        print(f"DEBUG: Error displaying frame: {e}")
-        # Switch to headless mode if display fails
-        global HEADLESS_MODE
-        HEADLESS_MODE = True
-        print("Switched to headless mode due to display error")
+        print(f"Error saving frame: {e}")
         return False
 
 try:
@@ -443,30 +403,28 @@ try:
     print(f"Model input size: {MODEL_INPUT_SIZE}")
     print(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
     print(f"Development mode: {'Enabled' if DEV_MODE else 'Disabled'}")
-    print("\nPress 'q' to quit or Ctrl+C to stop the program")
+    print("\nPress Ctrl+C to stop the program")
     
     start_time = time.time()
     frame_count = 0
     fps = 0
-    
-    # Check if the display environment is available
-    print(f"DEBUG: Display environment: {os.environ.get('DISPLAY', 'Not set')}")
+    last_frame_save = 0
     
     while True:
         try:
+            # Get frame from camera
             frame = get_frame(camera)
             frame_width = frame.shape[1]
             
-            # Create display frame and add overlay
+            # Create display frame for saving (without display)
             display_frame = frame.copy()
-            draw_overlay(display_frame)
             
             # Perform inference
             if DEV_MODE:
                 results = model(frame, conf=CONFIDENCE_THRESHOLD)
             else:
                 # Use Degirum's predict_batch method which returns a generator
-                print("DEBUG: Running inference with Degirum model...")
+                print("Running inference with Degirum model...")
                 
                 # Set a timeout for inference
                 inference_start = time.time()
@@ -478,19 +436,13 @@ try:
                     # Get the first result from the generator
                     for result in prediction_generator:
                         results = result
-                        print(f"DEBUG: Got result type: {type(results)}")
-                        print(f"DEBUG: Result attributes: {dir(results)}")
-                        print(f"DEBUG: Result string representation: {str(results)}")
-                        
-                        # Check if inference is taking too long
-                        if time.time() - inference_start > inference_timeout:
-                            print("WARNING: Inference timeout, breaking loop")
-                            break
-                            
+                        print(f"Got result type: {type(results)}")
+                        if hasattr(results, 'results'):
+                            print(f"Results contain {len(results.results)} items")
                         break  # Only process the first result
                     
                     if results is None:
-                        print("WARNING: No results from model, creating empty results")
+                        print("No results from model, creating empty results")
                         # Create a dummy result if none was returned
                         class DummyResult:
                             def __init__(self):
@@ -508,76 +460,53 @@ try:
             # Process detections
             detections = process_detections(frame, results)
             
+            # Save frame periodically (every 5 seconds)
+            current_time = time.time()
+            if current_time - last_frame_save > 5:
+                save_frame(frame, f"frame_{int(current_time)}.jpg")
+                last_frame_save = current_time
+            
             if len(detections) > 0:
                 print(f"Detected {len(detections)} objects")
+                
+                # Save detection frame
+                detection_filename = f"detection_{int(current_time)}.jpg"
+                
+                # Draw bounding boxes on the frame
                 for x1, y1, x2, y2, score, class_id in detections:
                     # Get cat name and color
                     cat_name = CAT_CLASSES.get(class_id, "Unknown")
                     color = COLORS.get(cat_name.lower(), COLORS['unknown'])
                     
-                    # Draw bounding box
+                    # Print detection details
+                    print(f"- {cat_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
+                    
+                    # Draw bounding box on saved frame
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
                     
-                    # Add label and confidence
+                    # Add label to saved frame
                     label_text = f"{cat_name}: {score:.2f}"
-                    text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                    
-                    cv2.rectangle(display_frame, 
-                                (x1, y1 - text_size[1] - 5), 
-                                (x1 + text_size[0], y1), 
-                                COLORS['black'], -1)
-                    
-                    cv2.putText(display_frame, label_text, 
-                            (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS['white'], 2)
+                    cv2.putText(display_frame, label_text, (x1, y1 - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS['white'], 2)
                     
                     # Handle detection and relay control
-                    relative_position = handle_detection([x1, y1, x2, y2], frame_width)
-                    draw_overlay(display_frame, relative_position)
+                    handle_detection([x1, y1, x2, y2], frame_width)
                 
-                # Always save frames with detections
-                detection_filename = f"detection_{int(time.time())}.jpg"
-                cv2.imwrite(detection_filename, display_frame)
-                print(f"DEBUG: Saved detection to {detection_filename}")
-            else:
-                print("DEBUG: No detections found")
+                # Save the annotated frame
+                save_frame(display_frame, detection_filename)
             
             # Calculate and display FPS
             frame_count += 1
-            elapsed_time = time.time() - start_time
+            elapsed_time = current_time - start_time
             
             if elapsed_time >= 1.0:
                 fps = frame_count / elapsed_time
                 frame_count = 0
-                start_time = time.time()
+                start_time = current_time
                 print(f"FPS: {fps:.2f}")
             
-            # Add FPS text
-            fps_text = f"FPS: {fps:.2f}"
-            cv2.rectangle(display_frame, (5, 5), (120, 35), COLORS['black'], -1)
-            cv2.putText(display_frame, fps_text, (10, 30), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['green'], 2)
-            
-            # Display the frame or handle headless mode
-            if HEADLESS_MODE:
-                # In headless mode, don't try to show frame
-                key = ord('c')  # dummy key to continue
-            else:
-                # Try to show frame if display is available
-                try:
-                    print("DEBUG: About to show frame")
-                    show_frame(display_frame)
-                    print("DEBUG: About to wait for key")
-                    key = cv2.waitKey(1) & 0xFF
-                    print(f"DEBUG: waitKey returned {key}")
-                except Exception as e:
-                    print(f"DEBUG: Error in display loop: {e}")
-                    key = ord('c')  # continue on error
-            
-            # Check for quit
-            if key == ord("q"):
-                print("\nQuitting program...")
-                break
+            # Short sleep to prevent high CPU usage
+            time.sleep(0.01)
             
         except Exception as e:
             print(f"Error in main loop: {e}")
@@ -585,7 +514,6 @@ try:
     
     # Clean up
     cleanup_camera(camera)
-    cv2.destroyAllWindows()
     if DEV_MODE:
         pygame.mixer.quit()
     print("Program ended successfully")
@@ -594,7 +522,6 @@ except Exception as e:
     print(f"Error: {e}")
     if 'camera' in locals():
         cleanup_camera(camera)
-    cv2.destroyAllWindows()
     if DEV_MODE:
         pygame.mixer.quit()
     
