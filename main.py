@@ -49,7 +49,7 @@ token = ""
 model_name = "yolov8n_cats"  # Your custom YOLOv8n model
 
 # Configuration
-CONFIDENCE_THRESHOLD = 0.2  # Lower confidence threshold to detect more objects
+CONFIDENCE_THRESHOLD = 0.1  # Very low confidence threshold to detect more objects
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv8n input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
 RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
@@ -390,21 +390,29 @@ def load_model():
         print("Loading Degirum model for Hailo accelerator...")
         import degirum as dg
         
-        # Load the model with local inference
+        # Load the model with local inference - use very low confidence threshold
+        # to make sure we're detecting everything possible
         model = dg.load_model(
             model_name="yolov8n_cats",
             inference_host_address="@local",  # Use @local for local inference
             zoo_url="/home/pi5/degirum_model_zoo",  # Path to your model zoo
-            output_confidence_threshold=0.2,  # Lower threshold to increase detections
+            output_confidence_threshold=0.1,  # Very low threshold to catch all possible detections
             overlay_font_scale=2.5,  # Font scale for overlay
-            overlay_show_probabilities=True  # Show confidence scores
+            overlay_show_probabilities=True,  # Show confidence scores
+            overlay_line_thickness=3  # Make bounding boxes more visible
         )
         
         # Print model properties to help with debugging
-        print("Model loaded successfully")
-        print(f"Model properties: {dir(model)}")
+        print(f"Model loaded successfully with confidence threshold: 0.1")
+        
+        # Try to access more model info
         if hasattr(model, 'info'):
             print(f"Model info: {model.info}")
+        if hasattr(model, 'config'):
+            print(f"Model config: {model.config}")
+            
+        # Print available model methods
+        print(f"Model methods: {[m for m in dir(model) if not m.startswith('_') and callable(getattr(model, m))]}")
         
         return model
         
@@ -529,10 +537,57 @@ def draw_detection_on_frame(frame, detection):
         traceback.print_exc()
         return frame  # Return original frame if drawing fails
 
+def test_detection_on_sample_image():
+    """
+    Test the detection on a sample image to verify model is working.
+    This is useful for debugging whether the issue is with the model or the camera.
+    """
+    try:
+        # Load a sample image if available
+        sample_image_path = "sample_cat.jpg"
+        if os.path.exists(sample_image_path):
+            print(f"Testing detection on sample image: {sample_image_path}")
+            sample_image = cv2.imread(sample_image_path)
+            
+            # Resize to match model input size
+            sample_image = cv2.resize(sample_image, MODEL_INPUT_SIZE)
+            
+            # Run inference on the sample image
+            import degirum as dg
+            model = load_model()  # Load the model
+            
+            if model:
+                try:
+                    # Run inference
+                    results = model.predict(sample_image)
+                    
+                    # Save the output
+                    if hasattr(results, 'image_overlay') and results.image_overlay is not None:
+                        cv2.imwrite("sample_detection.jpg", results.image_overlay)
+                        print("Saved sample detection to sample_detection.jpg")
+                    
+                    # Print detection results
+                    if hasattr(results, 'results'):
+                        print(f"Sample image results: {len(results.results)} detections")
+                    
+                    return True
+                except Exception as e:
+                    print(f"Error running inference on sample: {e}")
+            
+            return False
+    except Exception as e:
+        print(f"Error in test detection: {e}")
+        return False
+    
+    return False  # No sample image found
+
 try:
     # Load AI model with proper error handling
     model = load_model()
     setup_sound()
+    
+    # Test with a sample image if available
+    test_detection_on_sample_image()
     
     # Setup GPIO and camera
     if not DEV_MODE:
@@ -599,6 +654,37 @@ try:
                                     overlay_path = f"overlay_{int(current_time)}.jpg"
                                     cv2.imwrite(overlay_path, results.image_overlay)
                                     print(f"Saved raw overlay image to {overlay_path}")
+                                    
+                                    # Use the overlay image directly as it may contain the model's own visualizations
+                                    # Save an enhanced version with our additional visual elements
+                                    enhanced_overlay = results.image_overlay.copy()
+                                    height, width = enhanced_overlay.shape[:2]
+                                    
+                                    # Add visual indicators and guides
+                                    center_x = width // 2
+                                    
+                                    # Draw center line
+                                    cv2.line(enhanced_overlay, (center_x, 0), (center_x, height), (0, 255, 255), 2)
+                                    
+                                    # Draw threshold lines
+                                    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
+                                    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
+                                    cv2.line(enhanced_overlay, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
+                                    cv2.line(enhanced_overlay, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
+                                    
+                                    # Add timestamp and FPS
+                                    time_text = f"Time: {time.strftime('%H:%M:%S')}"
+                                    fps_text = f"FPS: {fps:.1f}"
+                                    cv2.rectangle(enhanced_overlay, (0, 0), (250, 70), (0, 0, 0), -1)
+                                    cv2.putText(enhanced_overlay, time_text, (10, 30), 
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+                                    cv2.putText(enhanced_overlay, fps_text, (10, 60), 
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                                    
+                                    # Save the enhanced overlay
+                                    enhanced_path = f"enhanced_{int(current_time)}.jpg"
+                                    cv2.imwrite(enhanced_path, enhanced_overlay)
+                                    print(f"Saved enhanced overlay to {enhanced_path}")
                                 
                                 # Print detailed information about the first detection
                                 if len(results.results) > 0:
