@@ -414,8 +414,7 @@ def load_model():
             zoo_url=zoo_url,  # Path to your model zoo
             output_confidence_threshold=0.1,  # Very low threshold to catch all possible detections
             overlay_font_scale=2.5,  # Font scale for overlay
-            overlay_show_probabilities=True,  # Show confidence scores
-            overlay_line_thickness=3  # Make bounding boxes more visible
+            overlay_show_probabilities=True  # Show confidence scores
         )
         
         # Print model properties to help with debugging
@@ -467,6 +466,7 @@ def load_fallback_model():
                     inference_host_address=inference_host_address,
                     zoo_url="degirum/public",  # Use public model zoo
                     output_confidence_threshold=0.1
+                    # No overlay parameters to avoid compatibility issues
                 )
                 print(f"Successfully loaded fallback model: {generic_model}")
                 return model
