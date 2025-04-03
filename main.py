@@ -242,22 +242,13 @@ def load_model():
             model = YOLO(model_path)
             print("Successfully loaded custom cat detection model")
         else:
-            print("Loading PyTorch model from cats_jan_2025.pt...")
-            model_path = 'cats_jan_2025.pt'
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file not found: {model_path}")
+            print("Loading Degirum model for Hailo accelerator...")
+            import degirum as dg
             
-            # Try loading as YOLOv8 model first
-            try:
-                print("Attempting to load as YOLOv8 model...")
-                model = YOLO(model_path)
-                print("Successfully loaded as YOLOv8 model")
-            except Exception as e:
-                print(f"Failed to load as YOLOv8 model: {str(e)}")
-                print("Attempting to load as PyTorch model...")
-                # Fallback to loading as PyTorch model
-                model = torch.load(model_path)
-                print("Successfully loaded as PyTorch model")
+            # Connect to the Hailo accelerator
+            zoo = dg.connect_model_zoo(inference_host_address, zoo_url, token)
+            model = zoo.load_model(model_name)
+            print("Successfully loaded Degirum model")
         
         # Print model information
         if DEV_MODE:
@@ -266,7 +257,8 @@ def load_model():
             print("Detecting cats: Gary, George, and Fred")
         else:
             print(f"Model loaded: {type(model).__name__}")
-            print(f"Model size: {os.path.getsize(model_path) / (1024*1024):.2f} MB")
+            print(f"Model name: {model_name}")
+            print("Running on Hailo accelerator")
         
         return model
     except Exception as e:
