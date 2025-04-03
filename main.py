@@ -8,6 +8,8 @@ import random
 import torch
 from ultralytics import YOLO
 import pygame
+import signal
+import sys
 
 # Development mode flag - set to True when developing on MacBook
 DEV_MODE = False  # Set to False for Raspberry Pi deployment
@@ -291,6 +293,18 @@ def load_model():
         traceback.print_exc()
         return None
 
+def signal_handler(sig, frame):
+    """Handle Ctrl+C signal"""
+    print("\nProgram terminated by user")
+    if 'camera' in locals():
+        cleanup_camera(camera)
+    if DEV_MODE:
+        pygame.mixer.quit()
+    sys.exit(0)
+
+# Register signal handler
+signal.signal(signal.SIGINT, signal_handler)
+
 try:
     # Load AI model with proper error handling
     model = load_model()
@@ -306,7 +320,7 @@ try:
     print(f"Model input size: {MODEL_INPUT_SIZE}")
     print(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
     print(f"Development mode: {'Enabled' if DEV_MODE else 'Disabled'}")
-    print("\nPress 'q' to quit or Ctrl+C to stop the program")
+    print("\nPress Ctrl+C to stop the program")
     
     start_time = time.time()
     frame_count = 0
@@ -374,39 +388,24 @@ try:
             cv2.putText(display_frame, fps_text, (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['green'], 2)
             
-            # Display the frame
-            cv2.imshow("Object Detection", display_frame)
+            # Save frame to file for debugging
+            if len(detections) > 0:
+                cv2.imwrite("debug_frame.jpg", display_frame)
             
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                print("\nQuitting program...")
-                break
-                
-        except KeyboardInterrupt:
-            print("\nProgram interrupted by user")
-            break
         except Exception as e:
             print(f"Error in main loop: {e}")
             break
     
     # Clean up
     cleanup_camera(camera)
-    cv2.destroyAllWindows()
     if DEV_MODE:
         pygame.mixer.quit()
     print("Program ended successfully")
 
-except KeyboardInterrupt:
-    print("\nProgram terminated by user")
-    if 'camera' in locals():
-        cleanup_camera(camera)
-    cv2.destroyAllWindows()
-    if DEV_MODE:
-        pygame.mixer.quit()
 except Exception as e:
     print(f"Error: {e}")
     if 'camera' in locals():
         cleanup_camera(camera)
-    cv2.destroyAllWindows()
     if DEV_MODE:
         pygame.mixer.quit()
     
