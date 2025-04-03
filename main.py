@@ -159,6 +159,26 @@ def get_frame(camera):
             print(f"Failed to capture frame from Pi camera: {e}")
             raise
 
+def process_detections(frame, results):
+    """Process detection results and return detections list"""
+    detections = []
+    if DEV_MODE:
+        for result in results:
+            for box in result.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                score = float(box.conf[0])
+                class_id = int(box.cls[0])
+                detections.append((x1, y1, x2, y2, score, class_id))
+    else:
+        # Process Degirum results
+        for result in results:
+            for box in result.results:
+                x1, y1, x2, y2 = map(int, box.bbox)
+                score = float(box.score)
+                class_id = int(box.class_id)
+                detections.append((x1, y1, x2, y2, score, class_id))
+    return detections
+
 def activate_relay(pin, duration=0.1):
     """Activate a relay for the specified duration"""
     global last_action, last_action_time
@@ -283,14 +303,17 @@ try:
         draw_overlay(display_frame)
         
         # Perform inference
-        results = model(frame, conf=CONFIDENCE_THRESHOLD)[0]
+        if DEV_MODE:
+            results = model(frame, conf=CONFIDENCE_THRESHOLD)
+        else:
+            # Use Degirum's predict_batch method
+            results = model.predict_batch([frame])
         
-        if len(results.boxes) > 0:
-            for box in results.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                score = float(box.conf[0])
-                class_id = int(box.cls[0])
-                
+        # Process detections
+        detections = process_detections(frame, results)
+        
+        if len(detections) > 0:
+            for x1, y1, x2, y2, score, class_id in detections:
                 # Get cat name and color
                 cat_name = CAT_CLASSES.get(class_id, "Unknown")
                 color = COLORS.get(cat_name.lower(), COLORS['unknown'])
