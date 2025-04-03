@@ -658,6 +658,25 @@ try:
                     # Create a copy for drawing
                     annotated_frame = display_frame.copy()
                     
+                    # Add visual guides
+                    height, width = annotated_frame.shape[:2]
+                    center_x = width // 2
+                    
+                    # Draw center line
+                    cv2.line(annotated_frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
+                    
+                    # Draw threshold lines
+                    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
+                    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
+                    cv2.line(annotated_frame, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
+                    cv2.line(annotated_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
+                    
+                    # Add header with FPS
+                    fps_text = f"FPS: {fps:.1f}"
+                    cv2.rectangle(annotated_frame, (0, 0), (200, 40), (0, 0, 0), -1)
+                    cv2.putText(annotated_frame, fps_text, (10, 30), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                    
                     # Draw bounding boxes on the frame
                     for detection in detections:
                         x1, y1, x2, y2, score, class_id = detection
@@ -672,7 +691,38 @@ try:
                         annotated_frame = draw_detection_on_frame(annotated_frame, detection)
                         
                         # Handle detection and relay control
-                        handle_detection([x1, y1, x2, y2], frame_width)
+                        relative_position = handle_detection([x1, y1, x2, y2], frame_width)
+                        
+                        # Draw directional indicators
+                        height, width = annotated_frame.shape[:2]
+                        if relative_position < -CENTER_THRESHOLD:
+                            # Left indicator
+                            direction_text = "MOVE LEFT"
+                            cv2.putText(annotated_frame, direction_text, (10, height - 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                            # Draw left arrow
+                            arrow_start = (width // 4, height - 50)
+                            arrow_end = (width // 8, height - 50)
+                            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
+                        elif relative_position > CENTER_THRESHOLD:
+                            # Right indicator
+                            direction_text = "MOVE RIGHT"
+                            cv2.putText(annotated_frame, direction_text, (width - 240, height - 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                            # Draw right arrow
+                            arrow_start = (width // 4 * 3, height - 50)
+                            arrow_end = (width // 8 * 7, height - 50)
+                            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
+                        else:
+                            # Center indicator
+                            direction_text = "CENTER"
+                            cv2.putText(annotated_frame, direction_text, (width // 2 - 80, height - 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+                        
+                        # Add position value
+                        pos_text = f"Position: {relative_position:.2f}"
+                        cv2.putText(annotated_frame, pos_text, (10, height - 60),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                     
                     # Save the annotated frame
                     save_frame(annotated_frame, detection_filename)
@@ -680,7 +730,31 @@ try:
             
             # Save frame periodically (every 5 seconds)
             if current_time - last_frame_save > 5:
-                save_frame(frame, f"frame_{int(current_time)}.jpg")
+                # Create a debug frame with guidelines
+                debug_frame = frame.copy()
+                height, width = debug_frame.shape[:2]
+                center_x = width // 2
+                
+                # Draw center line
+                cv2.line(debug_frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
+                
+                # Draw threshold lines
+                left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
+                right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
+                cv2.line(debug_frame, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
+                cv2.line(debug_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
+                
+                # Add timestamp and FPS
+                time_text = f"Time: {time.strftime('%H:%M:%S')}"
+                fps_text = f"FPS: {fps:.1f}"
+                cv2.rectangle(debug_frame, (0, 0), (250, 70), (0, 0, 0), -1)
+                cv2.putText(debug_frame, time_text, (10, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+                cv2.putText(debug_frame, fps_text, (10, 60), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                
+                # Save the debug frame
+                save_frame(debug_frame, f"debug_{int(current_time)}.jpg")
                 last_frame_save = current_time
             
             # Calculate and display FPS
