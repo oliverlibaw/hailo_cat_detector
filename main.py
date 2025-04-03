@@ -202,10 +202,29 @@ def process_detections(frame, results):
         try:
             if hasattr(results, 'results') and results.results:
                 print(f"Processing {len(results.results)} detections")
-                # Process results attribute
+                
+                # DEBUG: Print out the type and structure of the first result
+                first_result = results.results[0]
+                print(f"First result type: {type(first_result)}")
+                print(f"First result attributes: {dir(first_result)}")
+                
+                # Try several different ways to access the detection data
                 for detection in results.results:
                     try:
-                        # Extract bounding box, score and class ID based on what's available
+                        # Method 1: Direct access if detection is a dictionary
+                        if isinstance(detection, dict):
+                            if 'bbox' in detection:
+                                bbox = detection['bbox']
+                                x1, y1, x2, y2 = map(int, bbox)
+                                score = float(detection.get('score', 0.0))
+                                class_id = int(detection.get('category_id', 0))
+                                
+                                cat_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+                                print(f"Method 1 - Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
+                                detections.append((x1, y1, x2, y2, score, class_id))
+                                continue
+                        
+                        # Method 2: Access attributes if they exist
                         if hasattr(detection, 'bbox'):
                             # If bbox is an object
                             if hasattr(detection.bbox, 'x1'):
@@ -213,12 +232,15 @@ def process_detections(frame, results):
                                 y1 = int(detection.bbox.y1)
                                 x2 = int(detection.bbox.x2)
                                 y2 = int(detection.bbox.y2)
-                            # If bbox is a list/tuple
-                            else:
+                            # If bbox is a list/tuple/array
+                            elif hasattr(detection.bbox, '__getitem__'):
                                 x1 = int(detection.bbox[0])
                                 y1 = int(detection.bbox[1])
                                 x2 = int(detection.bbox[2])
                                 y2 = int(detection.bbox[3])
+                            else:
+                                print(f"Unknown bbox format: {detection.bbox}")
+                                continue
                                 
                             # Get score and class ID
                             if hasattr(detection, 'confidence'):
@@ -235,42 +257,53 @@ def process_detections(frame, results):
                             else:
                                 class_id = 0
                                 
-                            # Print detailed info about this detection
                             cat_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-                            print(f"Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
-                            
+                            print(f"Method 2 - Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
                             detections.append((x1, y1, x2, y2, score, class_id))
+                            continue
+                        
+                        # Method 3: Try to access via image_overlay if available
+                        if hasattr(detection, 'image_overlay'):
+                            print("Found image_overlay attribute, but can't extract coordinates directly")
+                            continue
+                            
+                        # If we got here, print the detection object to see what it contains
+                        print(f"Couldn't process detection: {detection}")
+                        if hasattr(detection, '__dict__'):
+                            print(f"Detection __dict__: {detection.__dict__}")
+                            
                     except Exception as e:
                         print(f"Error processing detection: {e}")
-                        # Print detailed error for debugging
                         import traceback
                         traceback.print_exc()
-                        
-            elif hasattr(results, 'detections'):
-                for detection in results.detections:
-                    try:
-                        # Get bounding box coordinates
-                        x1 = int(detection.bbox.x1)
-                        y1 = int(detection.bbox.y1)
-                        x2 = int(detection.bbox.x2)
-                        y2 = int(detection.bbox.y2)
-                        
-                        # Get score and class ID
-                        score = float(detection.confidence)
-                        class_id = int(detection.class_id)
-                        
-                        detections.append((x1, y1, x2, y2, score, class_id))
-                    except Exception as e:
-                        print(f"Error processing detection: {e}")
-            
-            # Try yet another method
-            elif hasattr(results, 'bboxes'):
+                
+            # If we still have no detections, try alternate approaches        
+            elif hasattr(results, 'bboxes') and hasattr(results, 'scores'):
+                print(f"Using bboxes/scores attributes")
                 for i in range(len(results.bboxes)):
                     bbox = results.bboxes[i]
                     score = results.scores[i]
-                    class_id = results.class_ids[i]
+                    class_id = results.class_ids[i] if hasattr(results, 'class_ids') else 0
                     x1, y1, x2, y2 = map(int, bbox)
+                    
+                    cat_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+                    print(f"Alt method - Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
                     detections.append((x1, y1, x2, y2, score, class_id))
+                    
+            # Try direct access to the image overlay if available
+            elif hasattr(results, 'image_overlay') and results.image_overlay is not None:
+                print("Using image_overlay, but can't extract coordinates for detections")
+                
+            # Last resort - dump everything about the results object
+            if len(detections) == 0:
+                print(f"No detections found. Results dump:")
+                for attr in dir(results):
+                    if not attr.startswith('__'):
+                        try:
+                            value = getattr(results, attr)
+                            print(f"  {attr}: {value}")
+                        except:
+                            print(f"  {attr}: <error accessing>")
         
         except Exception as e:
             print(f"Error in process_detections: {e}")
@@ -401,9 +434,35 @@ def save_frame(frame, filename="latest_frame.jpg"):
         if isinstance(frame, np.ndarray):
             # Create a copy to avoid modifying the original
             save_img = frame.copy()
-            cv2.imwrite(filename, save_img)
-            print(f"Saved frame to {filename}")
-            return True
+            
+            # Check if the image has the right format
+            if save_img.ndim != 3 or save_img.shape[2] != 3:
+                print(f"Warning: Unexpected image format: shape={save_img.shape}")
+                if save_img.ndim == 2:  # Convert grayscale to BGR
+                    save_img = cv2.cvtColor(save_img, cv2.COLOR_GRAY2BGR)
+            
+            # Verify that image contains valid data
+            if np.isnan(save_img).any() or np.isinf(save_img).any():
+                print("Warning: Image contains NaN or Inf values, fixing...")
+                save_img = np.nan_to_num(save_img)
+            
+            # Ensure image values are in valid range for uint8
+            if save_img.dtype != np.uint8:
+                if save_img.max() <= 1.0:
+                    # Convert from [0,1] float to [0,255] uint8
+                    save_img = (save_img * 255).astype(np.uint8)
+                else:
+                    # Otherwise just convert to uint8
+                    save_img = save_img.astype(np.uint8)
+            
+            # Save the image
+            success = cv2.imwrite(filename, save_img)
+            if success:
+                print(f"Saved frame to {filename}")
+                return True
+            else:
+                print(f"Failed to save image to {filename}")
+                return False
         else:
             print(f"Error: frame is not a valid image: {type(frame)}")
             return False
@@ -415,39 +474,60 @@ def save_frame(frame, filename="latest_frame.jpg"):
 
 def draw_detection_on_frame(frame, detection):
     """Draw a single detection on the frame with proper formatting"""
-    x1, y1, x2, y2, score, class_id = detection
-    
-    # Get cat name and color
-    cat_name = CAT_CLASSES.get(class_id, f"Unknown-{class_id}")
-    color = COLORS.get(cat_name.lower(), COLORS['unknown'])
-    
-    # Ensure coordinates are valid
-    height, width = frame.shape[:2]
-    x1 = max(0, min(x1, width-1))
-    y1 = max(0, min(y1, height-1))
-    x2 = max(0, min(x2, width-1))
-    y2 = max(0, min(y2, height-1))
-    
-    # Draw thick bounding box
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-    
-    # Add filled background for text
-    label_text = f"{cat_name}: {score:.2f}"
-    text_size, _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-    text_w, text_h = text_size
-    
-    # Draw filled rectangle for text background
-    cv2.rectangle(frame, 
-                 (x1, y1 - text_h - 10), 
-                 (x1 + text_w + 10, y1), 
-                 color, -1)  # -1 means filled
-    
-    # Draw text with contrasting color
-    cv2.putText(frame, label_text, 
-               (x1 + 5, y1 - 5), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLORS['white'], 2)
-    
-    return frame
+    try:
+        # Ensure we have a writable copy
+        draw_frame = frame.copy()
+        
+        x1, y1, x2, y2, score, class_id = detection
+        
+        # Get cat name and color
+        cat_name = CAT_CLASSES.get(class_id, f"Unknown-{class_id}")
+        color = COLORS.get(cat_name.lower(), COLORS['unknown'])
+        
+        # Ensure coordinates are valid integers
+        height, width = draw_frame.shape[:2]
+        x1 = max(0, min(int(x1), width-1))
+        y1 = max(0, min(int(y1), height-1))
+        x2 = max(0, min(int(x2), width-1))
+        y2 = max(0, min(int(y2), height-1))
+        
+        # Draw with extra thick bounding box to be easily visible
+        thickness = 3
+        cv2.rectangle(draw_frame, (x1, y1), (x2, y2), color, thickness)
+        
+        # Add filled background for text
+        label_text = f"{cat_name}: {score:.2f}"
+        font_scale = 0.8  # Increased font size
+        text_size, _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
+        text_w, text_h = text_size
+        
+        # Draw filled rectangle for text background - make it more visible
+        bg_color = color  # Use same color as box for background
+        cv2.rectangle(draw_frame, 
+                     (x1, y1 - text_h - 10), 
+                     (x1 + text_w + 10, y1), 
+                     bg_color, -1)  # -1 means filled
+        
+        # Draw text with contrasting color (white works well on most colors)
+        cv2.putText(draw_frame, label_text, 
+                   (x1 + 5, y1 - 5), 
+                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, COLORS['white'], 2)
+        
+        # Also draw a bright crosshair at center of object for visibility
+        center_x = (x1 + x2) // 2
+        center_y = (y1 + y2) // 2
+        crosshair_size = 10
+        
+        # Draw crosshair lines
+        cv2.line(draw_frame, (center_x - crosshair_size, center_y), (center_x + crosshair_size, center_y), (0, 255, 255), 2)
+        cv2.line(draw_frame, (center_x, center_y - crosshair_size), (center_x, center_y + crosshair_size), (0, 255, 255), 2)
+        
+        return draw_frame
+    except Exception as e:
+        print(f"Error drawing detection: {e}")
+        import traceback
+        traceback.print_exc()
+        return frame  # Return original frame if drawing fails
 
 try:
     # Load AI model with proper error handling
@@ -507,8 +587,41 @@ try:
                         for result in prediction_generator:
                             results = result
                             print(f"Got result type: {type(results)}")
+                            
+                            # Print more information about the results to understand their structure
                             if hasattr(results, 'results'):
                                 print(f"Results contain {len(results.results)} items")
+                                
+                                # Try to extract the result information using the image_overlay
+                                if hasattr(results, 'image_overlay') and results.image_overlay is not None:
+                                    print("Image overlay is available - using for visual verification")
+                                    # Save a copy of the overlay image for debugging
+                                    overlay_path = f"overlay_{int(current_time)}.jpg"
+                                    cv2.imwrite(overlay_path, results.image_overlay)
+                                    print(f"Saved raw overlay image to {overlay_path}")
+                                
+                                # Print detailed information about the first detection
+                                if len(results.results) > 0:
+                                    first_det = results.results[0]
+                                    print(f"First detection type: {type(first_det)}")
+                                    
+                                    # If it's a dictionary, print its contents
+                                    if isinstance(first_det, dict):
+                                        for k, v in first_det.items():
+                                            print(f"  {k}: {v}")
+                                    # If it's an object, print its attributes
+                                    elif hasattr(first_det, '__dict__'):
+                                        for k, v in first_det.__dict__.items():
+                                            print(f"  {k}: {v}")
+                                    # Otherwise try to list its attributes
+                                    else:
+                                        for attr in dir(first_det):
+                                            if not attr.startswith('__'):
+                                                try:
+                                                    val = getattr(first_det, attr)
+                                                    print(f"  {attr}: {val}")
+                                                except:
+                                                    print(f"  {attr}: <error accessing>")
                             break  # Only process the first result
                         
                         if results is None:
@@ -521,6 +634,8 @@ try:
                             
                     except Exception as e:
                         print(f"ERROR in inference: {e}")
+                        import traceback
+                        traceback.print_exc()
                         # Create a dummy result on error
                         class DummyResult:
                             def __init__(self):
