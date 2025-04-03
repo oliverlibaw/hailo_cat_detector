@@ -231,42 +231,30 @@ def draw_overlay(frame, relative_position=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLORS['red'], 2)
 
 def load_model():
-    """Load the AI model with proper error handling"""
+    """Load the YOLOv8 model for cat detection."""
     try:
-        if DEV_MODE:
-            print("Development mode: Loading custom YOLOv8n model for cat detection...")
-            model_path = 'yolov8n_cats.pt'  # Your custom model
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file not found: {model_path}")
-            
-            model = YOLO(model_path)
-            print("Successfully loaded custom cat detection model")
-        else:
-            print("Loading Degirum model for Hailo accelerator...")
-            import degirum as dg
-            
-            # Connect to the Hailo accelerator
-            zoo = dg.connect_model_zoo(inference_host_address, zoo_url, token)
-            model = zoo.load_model(model_name)
-            print("Successfully loaded Degirum model")
+        print("Loading Degirum model for Hailo accelerator...")
+        import degirum as dg
         
-        # Print model information
-        if DEV_MODE:
-            print(f"Model loaded: {model.__class__.__name__}")
-            print(f"Model size: {os.path.getsize('yolov8n_cats.pt') / (1024*1024):.2f} MB")
-            print("Detecting cats: Gary, George, and Fred")
-        else:
-            print(f"Model loaded: {type(model).__name__}")
-            print(f"Model name: {model_name}")
-            print("Running on Hailo accelerator")
+        # Load the model with local inference
+        model = dg.load_model(
+            model_name="yolov8n_cats",
+            inference_host_address="@local",  # Use @local for local inference
+            zoo_url="/home/pi5/degirum_model_zoo",  # Path to your model zoo
+            output_confidence_threshold=0.3,  # Minimum confidence threshold
+            overlay_font_scale=2.5,  # Font scale for overlay
+            overlay_show_probabilities=True  # Show confidence scores
+        )
         
+        print("Model loaded successfully")
         return model
+        
     except Exception as e:
         print(f"Failed to load model: {str(e)}")
         print("Detailed error traceback:")
         import traceback
         traceback.print_exc()
-        raise
+        return None
 
 try:
     # Load AI model with proper error handling
