@@ -14,8 +14,16 @@ DEV_MODE = False  # Set to False for Raspberry Pi deployment
 
 # Import Raspberry Pi specific modules only in production mode
 if not DEV_MODE:
-    from picamera2 import Picamera2
-    import RPi.GPIO as GPIO
+    try:
+        from picamera2 import Picamera2
+        import RPi.GPIO as GPIO
+        print("Successfully imported Pi-specific modules")
+    except ImportError as e:
+        print(f"Error importing Pi-specific modules: {e}")
+        print("Please ensure you have the following packages installed:")
+        print("sudo apt install -y python3-libcamera python3-picamera2")
+        print("And that you're running the script with the correct Python environment")
+        raise
 
 # GPIO Pin Setup
 RELAY_PINS = {
