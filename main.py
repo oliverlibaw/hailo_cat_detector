@@ -95,7 +95,23 @@ USE_COCO_MODEL = True
 CLASSES_TO_DETECT = [15]  # Cat class ID in COCO dataset
 
 # Colors for visualization
-COLORS = {
+COLORS = [
+    (0, 255, 0),     # Green for class 0
+    (255, 0, 0),     # Blue for class 1
+    (0, 0, 255),     # Red for class 2
+    (255, 255, 0),   # Cyan for class 3
+    (255, 0, 255),   # Magenta for class 4
+    (0, 255, 255),   # Yellow for class 5
+    (128, 0, 0),     # Maroon for class 6
+    (0, 128, 0),     # Dark Green for class 7
+    (0, 0, 128),     # Navy for class 8
+    (128, 128, 0),   # Olive for class 9
+    (128, 0, 128),   # Purple for class 10
+    (0, 128, 128)    # Teal for class 11
+]
+
+# Additional named colors for reference
+COLOR_NAMES = {
     'gary': (0, 255, 0),     # Green for Gary
     'george': (255, 0, 0),   # Blue for George
     'fred': (0, 0, 255),     # Red for Fred
@@ -391,14 +407,14 @@ def process_detections(frame, results):
                             
                             # If using COCO model, default to cat class
                             if USE_COCO_MODEL:
-                                class_id = 15  # Cat in COCO dataset
+                                class_id = 15  # Always use cat ID (15) for COCO model
                             else:
                                 class_id = 0  # Default class from custom model
                             
                             print(f"Potential detection from overlay: bbox={x1},{y1},{x2},{y2}, area={area}")
                             
                             # Draw on debug frame with different colors to distinguish boxes
-                            color = (0, 255-i*50, i*50)  # Different color for each box
+                            color = COLORS[class_id % len(COLORS)]  # Use the COLORS array
                             cv2.rectangle(debug_frame, (x1, y1), (x2, y2), color, 2)
                             cv2.putText(debug_frame, f"#{i}: {area}", (x1, y1-10), 
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
@@ -726,9 +742,14 @@ def draw_detection_on_frame(frame, detection):
         
         x1, y1, x2, y2, score, class_id = detection
         
-        # Get cat name and color
-        cat_name = CAT_CLASSES.get(class_id, f"Unknown-{class_id}")
-        color = COLORS.get(cat_name.lower(), COLORS['unknown'])
+        # Get class name
+        if USE_COCO_MODEL:
+            class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
+        else:
+            class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+        
+        # Get color based on class ID
+        color = COLORS[class_id % len(COLORS)]
         
         # Ensure coordinates are valid integers
         height, width = draw_frame.shape[:2]
@@ -742,7 +763,7 @@ def draw_detection_on_frame(frame, detection):
         cv2.rectangle(draw_frame, (x1, y1), (x2, y2), color, thickness)
         
         # Add filled background for text
-        label_text = f"{cat_name}: {score:.2f}"
+        label_text = f"{class_name}: {score:.2f}"
         font_scale = 0.8  # Increased font size
         text_size, _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
         text_w, text_h = text_size
@@ -757,7 +778,7 @@ def draw_detection_on_frame(frame, detection):
         # Draw text with contrasting color (white works well on most colors)
         cv2.putText(draw_frame, label_text, 
                    (x1 + 5, y1 - 5), 
-                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, COLORS['white'], 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 2)
         
         # Also draw a bright crosshair at center of object for visibility
         center_x = (x1 + x2) // 2
@@ -931,7 +952,8 @@ def process_actions(frame, detections, fps):
             print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
             
             # Draw detection on the annotated frame
-            color = COLORS[class_id % len(COLORS)]
+            color_index = class_id % len(COLORS)
+            color = COLORS[color_index]
             
             # Draw bounding box
             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
@@ -950,16 +972,16 @@ def process_actions(frame, detections, fps):
             if not DEV_MODE:
                 if relative_position < -CENTER_THRESHOLD:
                     # Object is on the left side
-                    activate_relay(RELAY_PINS['left'])
-                    activate_relay(RELAY_PINS['right'], False)
+                    set_relay(RELAY_PIN_LEFT, True)
+                    set_relay(RELAY_PIN_RIGHT, False)
                 elif relative_position > CENTER_THRESHOLD:
                     # Object is on the right side
-                    activate_relay(RELAY_PINS['left'], False)
-                    activate_relay(RELAY_PINS['right'])
+                    set_relay(RELAY_PIN_LEFT, False)
+                    set_relay(RELAY_PIN_RIGHT, True)
                 else:
                     # Object is centered
-                    activate_relay(RELAY_PINS['left'], False)
-                    activate_relay(RELAY_PINS['right'], False)
+                    set_relay(RELAY_PIN_LEFT, False)
+                    set_relay(RELAY_PIN_RIGHT, False)
             
             # Draw directional indicators
             if relative_position < -CENTER_THRESHOLD:
