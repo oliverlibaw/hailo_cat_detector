@@ -49,7 +49,7 @@ token = ""
 model_name = "yolov8n_cats"  # Your custom YOLOv8n model
 
 # Configuration
-CONFIDENCE_THRESHOLD = 0.1  # Very low confidence threshold to detect more objects
+DETECTION_THRESHOLD = 0.1  # Very low confidence threshold to detect more objects
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv8n input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
 RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
@@ -59,9 +59,36 @@ INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
 # Cat class names
 CAT_CLASSES = {
     0: "Gary",
-    1: "George",
-    2: "Fred"
+    1: "Fred",
+    2: "George"  # Updated to match model's label for category_id 2
 }
+
+# For COCO dataset
+COCO_CLASSES = {
+    0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 
+    6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant', 
+    11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat', 
+    16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear', 
+    22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 
+    27: 'tie', 28: 'suitcase', 29: 'frisbee', 30: 'skis', 31: 'snowboard', 
+    32: 'sports ball', 33: 'kite', 34: 'baseball bat', 35: 'baseball glove', 
+    36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle', 
+    40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl', 
+    46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli', 
+    51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake', 56: 'chair', 
+    57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table', 61: 'toilet', 
+    62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone', 
+    68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator', 
+    73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear', 
+    78: 'hair drier', 79: 'toothbrush'
+}
+
+# Which model to use - set to True to use YOLOv8n COCO model, False for custom cat model
+USE_COCO_MODEL = True
+
+# Which classes to detect (only used with COCO model)
+# For cats only, use [15]
+CLASSES_TO_DETECT = [15]  # Cat class ID in COCO dataset
 
 # Colors for visualization
 COLORS = {
@@ -204,12 +231,15 @@ def process_detections(frame, results):
             if hasattr(results, 'results') and results.results:
                 print(f"Processing {len(results.results)} detections")
                 
-                # DEBUG: Print out the type and structure of the first result
-                first_result = results.results[0]
-                print(f"First result type: {type(first_result)}")
-                print(f"First result attributes: {dir(first_result)}")
+                # For debug: Print the first result structure
+                if len(results.results) > 0:
+                    first_result = results.results[0]
+                    print(f"First detection type: {type(first_result)}")
+                    if isinstance(first_result, dict):
+                        for key, value in first_result.items():
+                            print(f"  {key}: {value}")
                 
-                # Try several different ways to access the detection data
+                # Process each detection
                 for detection in results.results:
                     try:
                         # Method 1: Direct access if detection is a dictionary
@@ -218,10 +248,19 @@ def process_detections(frame, results):
                                 bbox = detection['bbox']
                                 x1, y1, x2, y2 = map(int, bbox)
                                 score = float(detection.get('score', 0.0))
-                                class_id = int(detection.get('category_id', 0))
                                 
-                                cat_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-                                print(f"Method 1 - Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
+                                # Get the class ID depending on which model we're using
+                                if USE_COCO_MODEL:
+                                    class_id = int(detection.get('category_id', 0))
+                                    # Only process cat class (15) or other specified classes
+                                    if class_id not in CLASSES_TO_DETECT:
+                                        continue
+                                    class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
+                                else:
+                                    class_id = int(detection.get('category_id', 0))
+                                    class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+                                
+                                print(f"Detection: {class_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
                                 detections.append((x1, y1, x2, y2, score, class_id))
                                 continue
                         
@@ -258,8 +297,17 @@ def process_detections(frame, results):
                             else:
                                 class_id = 0
                                 
-                            cat_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-                            print(f"Method 2 - Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
+                            # For COCO model, only process specified classes
+                            if USE_COCO_MODEL and class_id not in CLASSES_TO_DETECT:
+                                continue
+                                
+                            # Get the class name based on the model
+                            if USE_COCO_MODEL:
+                                class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
+                            else:
+                                class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+                                
+                            print(f"Detection: {class_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
                             detections.append((x1, y1, x2, y2, score, class_id))
                             continue
                             
@@ -329,7 +377,12 @@ def process_detections(frame, results):
                             # Since we don't have class or score info, use defaults
                             x1, y1, x2, y2 = x, y, x+w, y+h
                             score = 0.5  # Assumed score for now
-                            class_id = 0  # Assumed class ID (first class)
+                            
+                            # If using COCO model, default to cat class
+                            if USE_COCO_MODEL:
+                                class_id = 15  # Cat in COCO dataset
+                            else:
+                                class_id = 0  # Default class from custom model
                             
                             print(f"Potential detection from overlay: bbox={x1},{y1},{x2},{y2}, area={area}")
                             
@@ -364,7 +417,7 @@ def process_detections(frame, results):
             
             # Last resort - dump everything about the results object
             if len(detections) == 0:
-                print(f"No detections found. Results dump:")
+                print("No detections found. Results dump:")
                 for attr in dir(results):
                     if not attr.startswith('__'):
                         try:
@@ -453,40 +506,46 @@ def draw_overlay(frame, relative_position=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLORS['red'], 2)
 
 def load_model():
-    """Load the YOLOv8 model for cat detection."""
+    """Load the YOLOv8 model for detection."""
     try:
-        print("Loading Degirum model for Hailo accelerator...")
+        if USE_COCO_MODEL:
+            print("Loading YOLOv8n COCO model for Hailo accelerator...")
+            model_to_load = "yolov8n_coco"
+            zoo_path = "degirum/public"  # Use public model zoo for COCO model
+        else:
+            print("Loading custom cat model for Hailo accelerator...")
+            model_to_load = model_name
+            zoo_path = zoo_url
+        
         import degirum as dg
         
         # Check if model zoo path exists
-        if not os.path.exists(zoo_url):
-            print(f"ERROR: Model zoo path not found: {zoo_url}")
+        if not os.path.exists(zoo_path):
+            print(f"ERROR: Model zoo path not found: {zoo_path}")
             print("Please check that the path is correct and the directory exists.")
             return None
             
-        print(f"Model zoo path verified: {zoo_url}")
-        print(f"Attempting to load model: {model_name}")
+        print(f"Model zoo path verified: {zoo_path}")
+        print(f"Attempting to load model: {model_to_load}")
         
         # List available models if possible
         try:
-            available_models = os.listdir(zoo_url)
+            available_models = os.listdir(zoo_path)
             print(f"Available files in model zoo directory: {available_models}")
         except Exception as e:
             print(f"Warning: Could not list contents of model zoo directory: {e}")
         
-        # Load the model with local inference - use very low confidence threshold
-        # to make sure we're detecting everything possible
+        # Load the model with local inference
         model = dg.load_model(
-            model_name=model_name,
+            model_name=model_to_load,
             inference_host_address=inference_host_address,  # Use @local for local inference
-            zoo_url=zoo_url,  # Path to your model zoo
-            output_confidence_threshold=0.1,  # Very low threshold to catch all possible detections
+            zoo_url=zoo_path,  # Path to model zoo
+            output_confidence_threshold=DETECTION_THRESHOLD,  # Use threshold from constants
             overlay_font_scale=2.5,  # Font scale for overlay
             overlay_show_probabilities=True  # Show confidence scores
         )
         
-        # Print model properties to help with debugging
-        print(f"Model loaded successfully with confidence threshold: 0.1")
+        print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
         
         # Try to access more model info
         if hasattr(model, 'info'):
@@ -752,311 +811,330 @@ def test_degirum_setup():
         print(f"Error testing DeGirum setup: {e}")
         return False
 
-try:
-    # First, test if DeGirum and Hailo are properly set up
-    print("\n=== Testing DeGirum and Hailo Setup ===")
-    degirum_available = test_degirum_setup()
-    if not degirum_available:
-        print("ERROR: DeGirum or Hailo setup issues detected.")
-        print("Please fix the issues above before running the script.")
-        sys.exit(1)
-    print("=== DeGirum and Hailo Setup Test Completed ===\n")
-    
-    # Load AI model with proper error handling
-    model = load_model()
-    
-    if model is None:
-        print("Primary model loading failed. Trying fallback model...")
-        model = load_fallback_model()
+class FPSCounter:
+    """Class to calculate FPS"""
+    def __init__(self):
+        self.start_time = time.time()
+        self.frame_count = 0
+        self.fps = 0
         
-    if model is None:
-        print("ERROR: Failed to load any model. Check the error messages above for details.")
-        print("Check that the DeGirum package is installed correctly and Hailo accelerator is connected.")
-        print("Exiting program.")
-        sys.exit(1)
+    def get_fps(self):
+        """Calculate FPS based on frame count and elapsed time"""
+        self.frame_count += 1
+        elapsed_time = time.time() - self.start_time
         
-    setup_sound()
+        # Update FPS calculation every second
+        if elapsed_time >= 1.0:
+            self.fps = self.frame_count / elapsed_time
+            self.frame_count = 0
+            self.start_time = time.time()
+            
+        return self.fps
+
+def process_actions(frame, detections, fps):
+    """Process detections and take appropriate actions"""
+    frame_width = frame.shape[1]
     
-    # Test with a sample image if available
-    test_detection_on_sample_image()
+    # Create a copy for drawing
+    annotated_frame = frame.copy()
     
-    # Setup GPIO and camera
-    if not DEV_MODE:
-        setup_gpio()
-    camera = setup_camera()
+    # Add visual guides
+    height, width = annotated_frame.shape[:2]
+    center_x = width // 2
     
-    # Print model info
-    print(f"Model: {model_name}")
-    print(f"Model input size: {MODEL_INPUT_SIZE}")
-    print(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
-    print(f"Development mode: {'Enabled' if DEV_MODE else 'Disabled'}")
-    print("\nPress Ctrl+C to stop the program")
+    # Draw center line
+    cv2.line(annotated_frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
     
-    start_time = time.time()
-    frame_count = 0
-    fps = 0
-    last_frame_save = 0
-    last_inference_time = 0
+    # Draw threshold lines
+    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
+    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
+    cv2.line(annotated_frame, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
+    cv2.line(annotated_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
     
-    print("Starting main loop - press Ctrl+C to exit")
+    # Add header with FPS
+    fps_text = f"FPS: {fps:.2f}"
+    cv2.rectangle(annotated_frame, (0, 0), (200, 40), (0, 0, 0), -1)
+    cv2.putText(annotated_frame, fps_text, (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
     
-    while True:
+    if len(detections) > 0:
+        print(f"Detected {len(detections)} objects")
+        
+        # Save detection frame
+        detection_filename = f"detection_{int(time.time())}.jpg"
+        
+        # Process each detection
+        for detection in detections:
+            x1, y1, x2, y2, score, class_id = detection
+            
+            # Get class name based on which model we're using
+            if USE_COCO_MODEL:
+                class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
+            else:
+                class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+            
+            # Print detection details
+            print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
+            
+            # Draw detection on the annotated frame
+            color = COLORS[class_id % len(COLORS)]
+            
+            # Draw bounding box
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
+            
+            # Add label with confidence
+            label = f"{class_name}: {score:.2f}"
+            cv2.rectangle(annotated_frame, (x1, y1-30), (x1+len(label)*15, y1), color, -1)
+            cv2.putText(annotated_frame, label, (x1, y1-5), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            
+            # Calculate relative position for GPIO control
+            object_center_x = (x1 + x2) / 2
+            relative_position = (object_center_x / frame_width) - 0.5
+            
+            # Control GPIO based on position
+            if not DEV_MODE:
+                if relative_position < -CENTER_THRESHOLD:
+                    # Object is on the left side
+                    activate_relay(RELAY_PINS['left'])
+                    activate_relay(RELAY_PINS['right'], False)
+                elif relative_position > CENTER_THRESHOLD:
+                    # Object is on the right side
+                    activate_relay(RELAY_PINS['left'], False)
+                    activate_relay(RELAY_PINS['right'])
+                else:
+                    # Object is centered
+                    activate_relay(RELAY_PINS['left'], False)
+                    activate_relay(RELAY_PINS['right'], False)
+            
+            # Draw directional indicators
+            if relative_position < -CENTER_THRESHOLD:
+                # Left indicator
+                direction_text = "MOVE LEFT"
+                cv2.putText(annotated_frame, direction_text, (10, height - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                # Draw left arrow
+                arrow_start = (width // 4, height - 50)
+                arrow_end = (width // 8, height - 50)
+                cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
+            elif relative_position > CENTER_THRESHOLD:
+                # Right indicator
+                direction_text = "MOVE RIGHT"
+                cv2.putText(annotated_frame, direction_text, (width - 240, height - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                # Draw right arrow
+                arrow_start = (width // 4 * 3, height - 50)
+                arrow_end = (width // 8 * 7, height - 50)
+                cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
+            else:
+                # Center indicator
+                direction_text = "CENTER"
+                cv2.putText(annotated_frame, direction_text, (width // 2 - 80, height - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+            
+            # Add position value
+            pos_text = f"Position: {relative_position:.2f}"
+            cv2.putText(annotated_frame, pos_text, (10, height - 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # Save the annotated frame
+        cv2.imwrite(detection_filename, annotated_frame)
+        print(f"Saved frame to {detection_filename}")
+        print(f"Saved annotated detection image to {detection_filename}")
+    
+    return annotated_frame
+
+def test_model_on_sample(model):
+    """Test the model on a sample image"""
+    try:
+        # Load sample image
+        sample_path = "sample_cat.jpg"
+        if not os.path.exists(sample_path):
+            print(f"Sample image not found: {sample_path}")
+            return
+            
+        print(f"Loading sample image: {sample_path}")
+        sample_img = cv2.imread(sample_path)
+        
+        if sample_img is None:
+            print("Failed to load sample image")
+            return
+            
+        # Perform inference on sample image
+        print("Running inference on sample image...")
+        
+        # Run inference
+        if DEV_MODE:
+            results = model(sample_img, conf=DETECTION_THRESHOLD)
+        else:
+            results_generator = model.predict_batch([sample_img])
+            results = next(results_generator)
+        
+        print(f"Sample image inference result type: {type(results)}")
+        
+        # Process detections
+        detections = process_detections(sample_img, results)
+        
+        # Create visualization
+        annotated_img = sample_img.copy()
+        
+        # Draw detections
+        if len(detections) > 0:
+            print(f"Found {len(detections)} objects in sample image:")
+            
+            for detection in detections:
+                x1, y1, x2, y2, score, class_id = detection
+                
+                # Get class name
+                if USE_COCO_MODEL:
+                    class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
+                else:
+                    class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+                
+                print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
+                
+                # Draw bounding box
+                color = COLORS[class_id % len(COLORS)]
+                cv2.rectangle(annotated_img, (x1, y1), (x2, y2), color, 2)
+                
+                # Add label with confidence
+                label = f"{class_name}: {score:.2f}"
+                cv2.rectangle(annotated_img, (x1, y1-30), (x1+len(label)*15, y1), color, -1)
+                cv2.putText(annotated_img, label, (x1, y1-5), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+            # Save the annotated sample image
+            cv2.imwrite("sample_detection.jpg", annotated_img)
+            print("Saved sample detection results to sample_detection.jpg")
+        else:
+            print("No objects detected in sample image")
+            
+            # If we have an image overlay, save it
+            if hasattr(results, 'image_overlay') and results.image_overlay is not None:
+                print("Saving model overlay for sample image")
+                cv2.imwrite("sample_overlay.jpg", results.image_overlay)
+                
+                # Also save the original for comparison
+                cv2.imwrite("sample_original.jpg", sample_img)
+                
+                # Create side-by-side comparison
+                if results.image_overlay.shape == sample_img.shape:
+                    comparison = np.hstack((sample_img, results.image_overlay))
+                    cv2.imwrite("sample_comparison.jpg", comparison)
+    
+    except Exception as e:
+        print(f"Error testing model on sample image: {e}")
+        import traceback
+        traceback.print_exc()
+
+def main():
+    """Main function"""
+    try:
+        print_header()
+        
+        # Test DeGirum and Hailo setup first
+        test_degirum_setup()
+        
+        # Load AI model with proper error handling
+        model = load_model()
+        
+        if model is None:
+            print("Primary model loading failed. Trying fallback model...")
+            model = load_fallback_model()
+            
+        if model is None:
+            print("ERROR: Failed to load any model. Check the error messages above for details.")
+            print("Check that the DeGirum package is installed correctly and Hailo accelerator is connected.")
+            print("Exiting program.")
+            sys.exit(1)
+
+        # Configure camera
+        camera = setup_camera()
+        
+        # Test model on a sample image
+        if os.path.exists("sample_cat.jpg"):
+            print("Testing model on sample image...")
+            test_model_on_sample(model)
+        
+        # Initialize GPIO if not in dev mode
+        if not DEV_MODE:
+            init_gpio()
+        
+        # Print configuration
+        print_config()
+        
+        # Initialize variables for smoothing detections
+        last_valid_detections = []
+        no_detection_frames = 0
+        max_no_detection_frames = 3  # Number of frames to keep using last detection
+        
+        # Main loop
         try:
-            current_time = time.time()
-            
-            # Get frame from camera
-            frame = get_frame(camera)
-            frame_width = frame.shape[1]
-            
-            # Create display frame for saving (without display)
-            display_frame = frame.copy()
-            
-            # Only run inference at specified intervals
-            run_inference = (current_time - last_inference_time) >= INFERENCE_INTERVAL
-            
-            if run_inference:
+            fps_counter = FPSCounter()
+            while True:
+                # Read frame from camera
+                frame = read_frame(camera)
+                
+                if frame is None:
+                    print("Failed to capture frame")
+                    time.sleep(0.1)
+                    continue
+                
+                # Run detection on the frame
+                t = time.time()
+                print(f"Running inference at t={t}s")
+                
                 # Perform inference
                 if DEV_MODE:
-                    results = model(frame, conf=CONFIDENCE_THRESHOLD)
+                    results = model(frame, conf=DETECTION_THRESHOLD)
                 else:
                     # Use Degirum's predict_batch method which returns a generator
-                    print(f"\nRunning inference at t={current_time:.1f}s")
-                    
-                    # Set a timeout for inference
-                    inference_start = time.time()
-                    inference_timeout = 5.0  # 5 seconds timeout
-                    results = None
-                    
-                    try:
-                        prediction_generator = model.predict_batch([frame])
-                        # Get the first result from the generator
-                        for result in prediction_generator:
-                            results = result
-                            print(f"Got result type: {type(results)}")
-                            
-                            # Print more information about the results to understand their structure
-                            if hasattr(results, 'results'):
-                                print(f"Results contain {len(results.results)} items")
-                                
-                                # Try to extract the result information using the image_overlay
-                                if hasattr(results, 'image_overlay') and results.image_overlay is not None:
-                                    print("Image overlay is available - using for visual verification")
-                                    # Save a copy of the overlay image for debugging
-                                    overlay_path = f"overlay_{int(current_time)}.jpg"
-                                    cv2.imwrite(overlay_path, results.image_overlay)
-                                    print(f"Saved raw overlay image to {overlay_path}")
-                                    
-                                    # Use the overlay image directly as it may contain the model's own visualizations
-                                    # Save an enhanced version with our additional visual elements
-                                    enhanced_overlay = results.image_overlay.copy()
-                                    height, width = enhanced_overlay.shape[:2]
-                                    
-                                    # Add visual indicators and guides
-                                    center_x = width // 2
-                                    
-                                    # Draw center line
-                                    cv2.line(enhanced_overlay, (center_x, 0), (center_x, height), (0, 255, 255), 2)
-                                    
-                                    # Draw threshold lines
-                                    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
-                                    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
-                                    cv2.line(enhanced_overlay, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
-                                    cv2.line(enhanced_overlay, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
-                                    
-                                    # Add timestamp and FPS
-                                    time_text = f"Time: {time.strftime('%H:%M:%S')}"
-                                    fps_text = f"FPS: {fps:.1f}"
-                                    cv2.rectangle(enhanced_overlay, (0, 0), (250, 70), (0, 0, 0), -1)
-                                    cv2.putText(enhanced_overlay, time_text, (10, 30), 
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-                                    cv2.putText(enhanced_overlay, fps_text, (10, 60), 
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-                                    
-                                    # Save the enhanced overlay
-                                    enhanced_path = f"enhanced_{int(current_time)}.jpg"
-                                    cv2.imwrite(enhanced_path, enhanced_overlay)
-                                    print(f"Saved enhanced overlay to {enhanced_path}")
-                                
-                                # Print detailed information about the first detection
-                                if len(results.results) > 0:
-                                    first_det = results.results[0]
-                                    print(f"First detection type: {type(first_det)}")
-                                    
-                                    # If it's a dictionary, print its contents
-                                    if isinstance(first_det, dict):
-                                        for k, v in first_det.items():
-                                            print(f"  {k}: {v}")
-                                    # If it's an object, print its attributes
-                                    elif hasattr(first_det, '__dict__'):
-                                        for k, v in first_det.__dict__.items():
-                                            print(f"  {k}: {v}")
-                                    # Otherwise try to list its attributes
-                                    else:
-                                        for attr in dir(first_det):
-                                            if not attr.startswith('__'):
-                                                try:
-                                                    val = getattr(first_det, attr)
-                                                    print(f"  {attr}: {val}")
-                                                except:
-                                                    print(f"  {attr}: <error accessing>")
-                            break  # Only process the first result
-                        
-                        if results is None:
-                            print("No results from model, creating empty results")
-                            # Create a dummy result if none was returned
-                            class DummyResult:
-                                def __init__(self):
-                                    self.results = []
-                            results = DummyResult()
-                            
-                    except Exception as e:
-                        print(f"ERROR in inference: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        # Create a dummy result on error
-                        class DummyResult:
-                            def __init__(self):
-                                self.results = []
-                        results = DummyResult()
+                    results_generator = model.predict_batch([frame])
+                    results = next(results_generator)
+                
+                # Process detection results
+                print(f"Got result type: {type(results)}")
                 
                 # Process detections
                 detections = process_detections(frame, results)
                 
-                # Update last inference time
-                last_inference_time = current_time
+                # Apply detection smoothing
+                if not detections:
+                    no_detection_frames += 1
+                    if no_detection_frames <= max_no_detection_frames and last_valid_detections:
+                        print(f"No detections in this frame, using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
+                        detections = last_valid_detections
+                    else:
+                        print("No detections found and no recent valid detections to use")
+                else:
+                    # We have valid detections, reset counter and save for future use
+                    no_detection_frames = 0
+                    last_valid_detections = detections.copy()
                 
-                # Handle and visualize detections
-                if len(detections) > 0:
-                    print(f"Detected {len(detections)} objects")
-                    
-                    # Save detection frame
-                    detection_filename = f"detection_{int(current_time)}.jpg"
-                    
-                    # Create a copy for drawing
-                    annotated_frame = display_frame.copy()
-                    
-                    # Add visual guides
-                    height, width = annotated_frame.shape[:2]
-                    center_x = width // 2
-                    
-                    # Draw center line
-                    cv2.line(annotated_frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
-                    
-                    # Draw threshold lines
-                    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
-                    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
-                    cv2.line(annotated_frame, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
-                    cv2.line(annotated_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
-                    
-                    # Add header with FPS
-                    fps_text = f"FPS: {fps:.1f}"
-                    cv2.rectangle(annotated_frame, (0, 0), (200, 40), (0, 0, 0), -1)
-                    cv2.putText(annotated_frame, fps_text, (10, 30), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-                    
-                    # Draw bounding boxes on the frame
-                    for detection in detections:
-                        x1, y1, x2, y2, score, class_id = detection
-                        
-                        # Get cat name and color
-                        cat_name = CAT_CLASSES.get(class_id, "Unknown")
-                        
-                        # Print detection details
-                        print(f"- {cat_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
-                        
-                        # Draw detection on the frame copy
-                        annotated_frame = draw_detection_on_frame(annotated_frame, detection)
-                        
-                        # Handle detection and relay control
-                        relative_position = handle_detection([x1, y1, x2, y2], frame_width)
-                        
-                        # Draw directional indicators
-                        height, width = annotated_frame.shape[:2]
-                        if relative_position < -CENTER_THRESHOLD:
-                            # Left indicator
-                            direction_text = "MOVE LEFT"
-                            cv2.putText(annotated_frame, direction_text, (10, height - 20),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                            # Draw left arrow
-                            arrow_start = (width // 4, height - 50)
-                            arrow_end = (width // 8, height - 50)
-                            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
-                        elif relative_position > CENTER_THRESHOLD:
-                            # Right indicator
-                            direction_text = "MOVE RIGHT"
-                            cv2.putText(annotated_frame, direction_text, (width - 240, height - 20),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                            # Draw right arrow
-                            arrow_start = (width // 4 * 3, height - 50)
-                            arrow_end = (width // 8 * 7, height - 50)
-                            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
-                        else:
-                            # Center indicator
-                            direction_text = "CENTER"
-                            cv2.putText(annotated_frame, direction_text, (width // 2 - 80, height - 20),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-                        
-                        # Add position value
-                        pos_text = f"Position: {relative_position:.2f}"
-                        cv2.putText(annotated_frame, pos_text, (10, height - 60),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                    
-                    # Save the annotated frame
-                    save_frame(annotated_frame, detection_filename)
-                    print(f"Saved annotated detection image to {detection_filename}")
-            
-            # Save frame periodically (every 5 seconds)
-            if current_time - last_frame_save > 5:
-                # Create a debug frame with guidelines
-                debug_frame = frame.copy()
-                height, width = debug_frame.shape[:2]
-                center_x = width // 2
+                # Get FPS
+                fps = fps_counter.get_fps()
                 
-                # Draw center line
-                cv2.line(debug_frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
+                # Process actions based on detections
+                process_actions(frame, detections, fps)
                 
-                # Draw threshold lines
-                left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
-                right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
-                cv2.line(debug_frame, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
-                cv2.line(debug_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
+                # Sleep to maintain desired FPS
+                time.sleep(1.0 / FPS)
                 
-                # Add timestamp and FPS
-                time_text = f"Time: {time.strftime('%H:%M:%S')}"
-                fps_text = f"FPS: {fps:.1f}"
-                cv2.rectangle(debug_frame, (0, 0), (250, 70), (0, 0, 0), -1)
-                cv2.putText(debug_frame, time_text, (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-                cv2.putText(debug_frame, fps_text, (10, 60), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-                
-                # Save the debug frame
-                save_frame(debug_frame, f"debug_{int(current_time)}.jpg")
-                last_frame_save = current_time
+        except KeyboardInterrupt:
+            print("Keyboard interrupt detected. Exiting...")
             
-            # Calculate and display FPS
-            frame_count += 1
-            elapsed_time = current_time - start_time
-            
-            if elapsed_time >= 1.0:
-                fps = frame_count / elapsed_time
-                frame_count = 0
-                start_time = current_time
-                print(f"FPS: {fps:.2f}")
-            
-            # Short sleep to prevent high CPU usage
-            time.sleep(0.01)
-            
-        except Exception as e:
-            print(f"Error in main loop: {e}")
-            break
-    
-    # Clean up
-    cleanup_camera(camera)
-    if DEV_MODE:
-        pygame.mixer.quit()
-    print("Program ended successfully")
+    except Exception as e:
+        print(f"Error in main loop: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        # Clean up resources
+        cleanup()
+        print("Program terminated")
 
+try:
+    main()
 except Exception as e:
     print(f"Error: {e}")
     if 'camera' in locals():
@@ -1065,3 +1143,128 @@ except Exception as e:
         pygame.mixer.quit()
     
 print("Resources cleaned up")
+
+def read_frame(camera):
+    """Read a frame from the camera"""
+    try:
+        # Get frame from camera
+        ret, frame = camera.read()
+        
+        if not ret:
+            print("Failed to capture frame")
+            return None
+            
+        return frame
+    except Exception as e:
+        print(f"Error reading frame: {e}")
+        return None
+
+def setup_camera():
+    """Setup camera for capture"""
+    print("Setting up camera...")
+    camera = cv2.VideoCapture(0)
+    
+    # Set camera resolution
+    camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    
+    # Check if camera opened successfully
+    if not camera.isOpened():
+        print("Error: Could not open camera.")
+        sys.exit(1)
+    
+    print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
+    return camera
+
+def init_gpio():
+    """Initialize GPIO pins for relay control"""
+    try:
+        import RPi.GPIO as GPIO
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(RELAY_PIN_LEFT, GPIO.OUT)
+        GPIO.setup(RELAY_PIN_RIGHT, GPIO.OUT)
+        
+        # Initialize both relays to off
+        GPIO.output(RELAY_PIN_LEFT, GPIO.LOW)
+        GPIO.output(RELAY_PIN_RIGHT, GPIO.LOW)
+        
+        print(f"GPIO initialized: left relay on pin {RELAY_PIN_LEFT}, right relay on pin {RELAY_PIN_RIGHT}")
+    except ImportError:
+        print("WARNING: RPi.GPIO module not available, GPIO control disabled")
+    except Exception as e:
+        print(f"Error initializing GPIO: {e}")
+        
+def set_relay(pin, state):
+    """Set relay state (True = ON, False = OFF)"""
+    try:
+        import RPi.GPIO as GPIO
+        GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
+        if DEBUG_MODE:
+            print(f"Relay {pin} set to {'ON' if state else 'OFF'}")
+    except (ImportError, NameError):
+        # If we can't import GPIO, just print what we would do
+        if DEBUG_MODE:
+            print(f"Would set relay {pin} to {'ON' if state else 'OFF'}")
+    except Exception as e:
+        print(f"Error setting relay {pin}: {e}")
+
+def cleanup():
+    """Clean up resources before exiting"""
+    print("Cleaning up resources...")
+    
+    # Clean up GPIO
+    try:
+        if not DEV_MODE:
+            import RPi.GPIO as GPIO
+            GPIO.cleanup()
+            print("GPIO pins cleaned up")
+    except:
+        pass
+    
+    # Release camera if it exists
+    try:
+        if 'camera' in globals() and camera is not None:
+            camera.release()
+            print("Camera released")
+    except:
+        pass
+
+def print_config():
+    """Print current configuration settings"""
+    print("\n=== Configuration ===")
+    print(f"Model type: {'COCO YOLOv8n' if USE_COCO_MODEL else 'Custom cat model'}")
+    if USE_COCO_MODEL:
+        print(f"Classes to detect: {[COCO_CLASSES[i] for i in CLASSES_TO_DETECT]}")
+    else:
+        print(f"Classes to detect: {list(CAT_CLASSES.values())}")
+    print(f"Detection threshold: {DETECTION_THRESHOLD}")
+    print(f"Display resolution: {FRAME_WIDTH}x{FRAME_HEIGHT}")
+    print(f"Target FPS: {FPS}")
+    print(f"Debug mode: {'Enabled' if DEBUG_MODE else 'Disabled'}")
+    print(f"Development mode: {'Enabled' if DEV_MODE else 'Disabled'}")
+    print("=== End Configuration ===\n")
+    
+def print_header():
+    """Print program header information"""
+    print("\n===============================================")
+    print("=  Cat Detection System with Hailo AI Kit    =")
+    print("===============================================")
+    print(f"OpenCV version: {cv2.__version__}")
+    
+    # Check if running in headless mode
+    if 'DISPLAY' not in os.environ:
+        print("Running in headless mode - terminal output only")
+    else:
+        print("Running with display support")
+        
+    # Print platform-specific information
+    if sys.platform.startswith('linux'):
+        try:
+            # Try to import Pi-specific libraries to detect platform
+            import RPi.GPIO
+            print("Successfully imported Pi-specific modules")
+        except ImportError:
+            print("Not running on Raspberry Pi (RPi.GPIO not available)")
+    else:
+        print(f"Running on platform: {sys.platform}")
+    print("")
