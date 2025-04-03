@@ -171,6 +171,11 @@ def get_frame(camera):
             frame = camera.capture_array()
             # Convert from RGB to BGR for OpenCV
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            print(f"DEBUG: Frame shape: {frame.shape}, min: {np.min(frame)}, max: {np.max(frame)}")
+            # Save a frame periodically to check if it's capturing correctly
+            if time.time() % 10 < 0.5:  # Save roughly every 10 seconds
+                cv2.imwrite("debug_frame.jpg", frame)
+                print("DEBUG: Saved frame to debug_frame.jpg")
             return frame
         except Exception as e:
             print(f"Failed to capture frame from Pi camera: {e}")
@@ -179,6 +184,8 @@ def get_frame(camera):
 def process_detections(frame, results):
     """Process detection results and return detections list"""
     detections = []
+    print(f"DEBUG: Processing detections, result type: {type(results)}")
+    
     if DEV_MODE:
         for result in results:
             for box in result.boxes:
@@ -188,20 +195,62 @@ def process_detections(frame, results):
                 detections.append((x1, y1, x2, y2, score, class_id))
     else:
         # Process Degirum results
-        if hasattr(results, 'detections'):
-            # Iterate through detections if available
-            for detection in results.detections:
-                # Get bounding box coordinates
-                x1 = int(detection.bbox.x1)
-                y1 = int(detection.bbox.y1)
-                x2 = int(detection.bbox.x2)
-                y2 = int(detection.bbox.y2)
-                
-                # Get score and class ID
-                score = float(detection.confidence)
-                class_id = int(detection.class_id)
-                
-                detections.append((x1, y1, x2, y2, score, class_id))
+        print(f"DEBUG: Degirum result dir: {dir(results)}")
+        
+        # Try different ways to access detections
+        try:
+            if hasattr(results, 'detections'):
+                print(f"DEBUG: Found 'detections' attribute with {len(results.detections)} items")
+                # Iterate through detections if available
+                for detection in results.detections:
+                    try:
+                        # Get bounding box coordinates
+                        print(f"DEBUG: Detection dir: {dir(detection)}")
+                        x1 = int(detection.bbox.x1)
+                        y1 = int(detection.bbox.y1)
+                        x2 = int(detection.bbox.x2)
+                        y2 = int(detection.bbox.y2)
+                        
+                        # Get score and class ID
+                        score = float(detection.confidence)
+                        class_id = int(detection.class_id)
+                        
+                        detections.append((x1, y1, x2, y2, score, class_id))
+                        print(f"DEBUG: Added detection: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score}, class={class_id}")
+                    except Exception as e:
+                        print(f"DEBUG: Error processing detection: {e}")
+            
+            # Try alternative ways to access detections if the above didn't work
+            elif hasattr(results, 'results'):
+                print(f"DEBUG: Found 'results' attribute")
+                for detection in results.results:
+                    print(f"DEBUG: Processing result item: {detection}")
+                    # Process detection here
+            
+            # Try yet another method
+            elif hasattr(results, 'bboxes'):
+                print(f"DEBUG: Found 'bboxes' attribute")
+                for i in range(len(results.bboxes)):
+                    bbox = results.bboxes[i]
+                    score = results.scores[i]
+                    class_id = results.class_ids[i]
+                    x1, y1, x2, y2 = map(int, bbox)
+                    detections.append((x1, y1, x2, y2, score, class_id))
+            
+            # Try direct iteration
+            else:
+                try:
+                    print(f"DEBUG: Trying direct iteration")
+                    for detection in results:
+                        print(f"DEBUG: Detection item: {detection}")
+                        # Process detection here
+                except Exception as e:
+                    print(f"DEBUG: Error during iteration: {e}")
+        
+        except Exception as e:
+            print(f"DEBUG: Error in process_detections: {e}")
+    
+    print(f"DEBUG: Returning {len(detections)} detections")
     return detections
 
 def activate_relay(pin, duration=0.1):
@@ -334,6 +383,9 @@ try:
     frame_count = 0
     fps = 0
     
+    # Check if the display environment is available
+    print(f"DEBUG: Display environment: {os.environ.get('DISPLAY', 'Not set')}")
+    
     while True:
         try:
             frame = get_frame(camera)
@@ -348,10 +400,14 @@ try:
                 results = model(frame, conf=CONFIDENCE_THRESHOLD)
             else:
                 # Use Degirum's predict_batch method which returns a generator
+                print("DEBUG: Running inference with Degirum model...")
                 prediction_generator = model.predict_batch([frame])
                 # Get the first result from the generator
                 for result in prediction_generator:
                     results = result
+                    print(f"DEBUG: Got result type: {type(results)}")
+                    print(f"DEBUG: Result attributes: {dir(results)}")
+                    print(f"DEBUG: Result string representation: {str(results)}")
                     break
             
             # Process detections
@@ -383,6 +439,8 @@ try:
                     # Handle detection and relay control
                     relative_position = handle_detection([x1, y1, x2, y2], frame_width)
                     draw_overlay(display_frame, relative_position)
+            else:
+                print("DEBUG: No detections found")
             
             # Calculate and display FPS
             frame_count += 1
@@ -401,9 +459,19 @@ try:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['green'], 2)
             
             # Display the frame
-            cv2.imshow("Object Detection", display_frame)
+            try:
+                print("DEBUG: Attempting to show frame...")
+                cv2.imshow("Object Detection", display_frame)
+                print("DEBUG: Frame displayed successfully")
+            except Exception as e:
+                print(f"DEBUG: Error displaying frame: {e}")
+                # Save the frame to file if we can't display it (headless mode)
+                if len(detections) > 0:
+                    cv2.imwrite("detection_frame.jpg", display_frame)
+                    print("DEBUG: Saved detection frame to detection_frame.jpg")
             
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
                 print("\nQuitting program...")
                 break
             
