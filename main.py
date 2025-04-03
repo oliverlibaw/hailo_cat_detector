@@ -188,18 +188,17 @@ def process_detections(frame, results):
                 detections.append((x1, y1, x2, y2, score, class_id))
     else:
         # Process Degirum results
-        for detection in results:
-            # DeGirum returns a list of dictionaries with detection results
-            # Each result has 'bbox', 'score', 'category_id' fields
-            bbox = detection['bbox']
-            x1 = int(bbox[0])
-            y1 = int(bbox[1])
-            x2 = int(bbox[2])
-            y2 = int(bbox[3])
+        # Each result is a DetectionResults object
+        for detection in results.detections:
+            # Get bounding box coordinates
+            x1 = int(detection.bbox.x1)
+            y1 = int(detection.bbox.y1)
+            x2 = int(detection.bbox.x2)
+            y2 = int(detection.bbox.y2)
             
             # Get score and class ID
-            score = float(detection['score'])
-            class_id = int(detection['category_id'])
+            score = float(detection.confidence)
+            class_id = int(detection.class_id)
             
             detections.append((x1, y1, x2, y2, score, class_id))
     return detections
