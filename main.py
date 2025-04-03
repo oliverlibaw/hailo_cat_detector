@@ -1116,20 +1116,46 @@ def read_frame(camera):
 
 def setup_camera():
     """Setup camera for capture"""
-    print("Setting up camera...")
-    camera = cv2.VideoCapture(0)
-    
-    # Set camera resolution
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-    
-    # Check if camera opened successfully
-    if not camera.isOpened():
-        print("Error: Could not open camera.")
-        sys.exit(1)
-    
-    print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
-    return camera
+    if DEV_MODE:
+        print("Setting up camera for development mode...")
+        camera = cv2.VideoCapture(0)
+        
+        # Set camera resolution
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        
+        # Check if camera opened successfully
+        if not camera.isOpened():
+            print("Error: Could not open camera.")
+            sys.exit(1)
+        
+        print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
+        return camera
+    else:
+        print("Setting up Pi camera...")
+        try:
+            from picamera2 import Picamera2
+            
+            # Create and configure Picamera2
+            picam2 = Picamera2()
+            
+            # Configure camera with preview configuration
+            camera_config = picam2.create_preview_configuration(
+                main={"format": "RGB888", "size": (FRAME_WIDTH, FRAME_HEIGHT)}
+            )
+            
+            # Apply the configuration
+            picam2.configure(camera_config)
+            
+            # Start the camera
+            picam2.start()
+            
+            print(f"Pi camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
+            return picam2
+        except Exception as e:
+            print(f"Error setting up Pi camera: {e}")
+            print("Please check that the camera is properly connected and enabled")
+            raise
 
 def init_gpio():
     """Initialize GPIO pins for relay control"""
