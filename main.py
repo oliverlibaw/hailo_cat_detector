@@ -189,10 +189,18 @@ def process_detections(frame, results):
     else:
         # Process Degirum results
         for result in results:
-            for box in result.results:
-                x1, y1, x2, y2 = map(int, box.bbox)
-                score = float(box.score)
-                class_id = int(box.class_id)
+            # Degirum returns a list of detections
+            for detection in result:
+                # Get bounding box coordinates
+                x1 = int(detection['bbox'][0])
+                y1 = int(detection['bbox'][1])
+                x2 = int(detection['bbox'][2])
+                y2 = int(detection['bbox'][3])
+                
+                # Get score and class ID
+                score = float(detection['score'])
+                class_id = int(detection['class_id'])
+                
                 detections.append((x1, y1, x2, y2, score, class_id))
     return detections
 
