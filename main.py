@@ -306,74 +306,86 @@ try:
     print(f"Model input size: {MODEL_INPUT_SIZE}")
     print(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
     print(f"Development mode: {'Enabled' if DEV_MODE else 'Disabled'}")
+    print("\nPress 'q' to quit or Ctrl+C to stop the program")
     
     start_time = time.time()
     frame_count = 0
     fps = 0
     
     while True:
-        frame = get_frame(camera)
-        frame_width = frame.shape[1]
-        
-        # Create display frame and add overlay
-        display_frame = frame.copy()
-        draw_overlay(display_frame)
-        
-        # Perform inference
-        if DEV_MODE:
-            results = model(frame, conf=CONFIDENCE_THRESHOLD)
-        else:
-            # Use Degirum's predict_batch method
-            results = model.predict_batch([frame])
-        
-        # Process detections
-        detections = process_detections(frame, results)
-        
-        if len(detections) > 0:
-            for x1, y1, x2, y2, score, class_id in detections:
-                # Get cat name and color
-                cat_name = CAT_CLASSES.get(class_id, "Unknown")
-                color = COLORS.get(cat_name.lower(), COLORS['unknown'])
+        try:
+            frame = get_frame(camera)
+            frame_width = frame.shape[1]
+            
+            # Create display frame and add overlay
+            display_frame = frame.copy()
+            draw_overlay(display_frame)
+            
+            # Perform inference
+            if DEV_MODE:
+                results = model(frame, conf=CONFIDENCE_THRESHOLD)
+            else:
+                # Use Degirum's predict_batch method
+                results = model.predict_batch([frame])
+            
+            # Process detections
+            detections = process_detections(frame, results)
+            
+            if len(detections) > 0:
+                print(f"Detected {len(detections)} objects")
+                for x1, y1, x2, y2, score, class_id in detections:
+                    # Get cat name and color
+                    cat_name = CAT_CLASSES.get(class_id, "Unknown")
+                    color = COLORS.get(cat_name.lower(), COLORS['unknown'])
+                    
+                    # Draw bounding box
+                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Add label and confidence
+                    label_text = f"{cat_name}: {score:.2f}"
+                    text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+                    
+                    cv2.rectangle(display_frame, 
+                                (x1, y1 - text_size[1] - 5), 
+                                (x1 + text_size[0], y1), 
+                                COLORS['black'], -1)
+                    
+                    cv2.putText(display_frame, label_text, 
+                            (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS['white'], 2)
+                    
+                    # Handle detection and relay control
+                    relative_position = handle_detection([x1, y1, x2, y2], frame_width)
+                    draw_overlay(display_frame, relative_position)
+            
+            # Calculate and display FPS
+            frame_count += 1
+            elapsed_time = time.time() - start_time
+            
+            if elapsed_time >= 1.0:
+                fps = frame_count / elapsed_time
+                frame_count = 0
+                start_time = time.time()
+                print(f"FPS: {fps:.2f}")
+            
+            # Add FPS text
+            fps_text = f"FPS: {fps:.2f}"
+            cv2.rectangle(display_frame, (5, 5), (120, 35), COLORS['black'], -1)
+            cv2.putText(display_frame, fps_text, (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['green'], 2)
+            
+            # Display the frame
+            cv2.imshow("Object Detection", display_frame)
+            
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                print("\nQuitting program...")
+                break
                 
-                # Draw bounding box
-                cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-                
-                # Add label and confidence
-                label_text = f"{cat_name}: {score:.2f}"
-                text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-                
-                cv2.rectangle(display_frame, 
-                            (x1, y1 - text_size[1] - 5), 
-                            (x1 + text_size[0], y1), 
-                            COLORS['black'], -1)
-                
-                cv2.putText(display_frame, label_text, 
-                        (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS['white'], 2)
-                
-                # Handle detection and relay control
-                relative_position = handle_detection([x1, y1, x2, y2], frame_width)
-                draw_overlay(display_frame, relative_position)
-        
-        # Calculate and display FPS
-        frame_count += 1
-        elapsed_time = time.time() - start_time
-        
-        if elapsed_time >= 1.0:
-            fps = frame_count / elapsed_time
-            frame_count = 0
-            start_time = time.time()
-        
-        # Add FPS text
-        fps_text = f"FPS: {fps:.2f}"
-        cv2.rectangle(display_frame, (5, 5), (120, 35), COLORS['black'], -1)
-        cv2.putText(display_frame, fps_text, (10, 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['green'], 2)
-        
-        # Display the frame
-        cv2.imshow("Object Detection", display_frame)
-        
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+        except KeyboardInterrupt:
+            print("\nProgram interrupted by user")
+            break
+        except Exception as e:
+            print(f"Error in main loop: {e}")
             break
     
     # Clean up
@@ -384,7 +396,7 @@ try:
     print("Program ended successfully")
 
 except KeyboardInterrupt:
-    print("Program terminated by user")
+    print("\nProgram terminated by user")
     if 'camera' in locals():
         cleanup_camera(camera)
     cv2.destroyAllWindows()
