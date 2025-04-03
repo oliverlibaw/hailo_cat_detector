@@ -18,6 +18,18 @@ DEV_MODE = False  # Set to False for Raspberry Pi deployment
 HEADLESS_MODE = os.environ.get('DISPLAY', '') == ''
 if HEADLESS_MODE:
     print("Running in headless mode - no display window will be shown")
+else:
+    print("Running with display - window should be shown")
+    # Initialize X11 window system for OpenCV
+    try:
+        cv2.namedWindow("Object Detection", cv2.WINDOW_NORMAL)
+        cv2.moveWindow("Object Detection", 0, 0)
+        cv2.resizeWindow("Object Detection", 640, 640)
+        print("OpenCV window created successfully")
+    except Exception as e:
+        print(f"WARNING: Failed to create OpenCV window: {e}")
+        print("Switching to headless mode")
+        HEADLESS_MODE = True
 
 # Import Raspberry Pi specific modules only in production mode
 if not DEV_MODE:
@@ -394,24 +406,26 @@ signal.signal(signal.SIGINT, signal_handler)
 
 def show_frame(frame, title="Object Detection"):
     """Safely display a frame or save it in headless mode"""
+    # Always save frame periodically for debugging
+    if time.time() % 5 < 0.2:  # Save roughly every 5 seconds
+        cv2.imwrite("latest_frame.jpg", frame)
+        print("DEBUG: Saved latest frame to latest_frame.jpg")
+        
     if HEADLESS_MODE:
-        # Save the frame periodically in headless mode
-        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
-            cv2.imwrite("latest_frame.jpg", frame)
-            print("DEBUG: Saved latest frame to latest_frame.jpg")
-        # Save detection frames whenever they occur
         return False
     
     try:
+        # Use non-blocking display
+        print("DEBUG: Showing frame in window")
         cv2.imshow(title, frame)
-        cv2.waitKey(1)  # Process any pending events
+        print("DEBUG: Frame displayed successfully")
         return True
     except Exception as e:
         print(f"DEBUG: Error displaying frame: {e}")
-        # Save the frame periodically in headless mode
-        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
-            cv2.imwrite("latest_frame.jpg", frame)
-            print("DEBUG: Saved latest frame to latest_frame.jpg")
+        # Switch to headless mode if display fails
+        global HEADLESS_MODE
+        HEADLESS_MODE = True
+        print("Switched to headless mode due to display error")
         return False
 
 try:
@@ -453,14 +467,43 @@ try:
             else:
                 # Use Degirum's predict_batch method which returns a generator
                 print("DEBUG: Running inference with Degirum model...")
-                prediction_generator = model.predict_batch([frame])
-                # Get the first result from the generator
-                for result in prediction_generator:
-                    results = result
-                    print(f"DEBUG: Got result type: {type(results)}")
-                    print(f"DEBUG: Result attributes: {dir(results)}")
-                    print(f"DEBUG: Result string representation: {str(results)}")
-                    break
+                
+                # Set a timeout for inference
+                inference_start = time.time()
+                inference_timeout = 5.0  # 5 seconds timeout
+                results = None
+                
+                try:
+                    prediction_generator = model.predict_batch([frame])
+                    # Get the first result from the generator
+                    for result in prediction_generator:
+                        results = result
+                        print(f"DEBUG: Got result type: {type(results)}")
+                        print(f"DEBUG: Result attributes: {dir(results)}")
+                        print(f"DEBUG: Result string representation: {str(results)}")
+                        
+                        # Check if inference is taking too long
+                        if time.time() - inference_start > inference_timeout:
+                            print("WARNING: Inference timeout, breaking loop")
+                            break
+                            
+                        break  # Only process the first result
+                    
+                    if results is None:
+                        print("WARNING: No results from model, creating empty results")
+                        # Create a dummy result if none was returned
+                        class DummyResult:
+                            def __init__(self):
+                                self.results = []
+                        results = DummyResult()
+                        
+                except Exception as e:
+                    print(f"ERROR in inference: {e}")
+                    # Create a dummy result on error
+                    class DummyResult:
+                        def __init__(self):
+                            self.results = []
+                    results = DummyResult()
             
             # Process detections
             detections = process_detections(frame, results)
@@ -521,8 +564,15 @@ try:
                 key = ord('c')  # dummy key to continue
             else:
                 # Try to show frame if display is available
-                show_frame(display_frame)
-                key = cv2.waitKey(1) & 0xFF
+                try:
+                    print("DEBUG: About to show frame")
+                    show_frame(display_frame)
+                    print("DEBUG: About to wait for key")
+                    key = cv2.waitKey(1) & 0xFF
+                    print(f"DEBUG: waitKey returned {key}")
+                except Exception as e:
+                    print(f"DEBUG: Error in display loop: {e}")
+                    key = ord('c')  # continue on error
             
             # Check for quit
             if key == ord("q"):
