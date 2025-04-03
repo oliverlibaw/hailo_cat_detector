@@ -49,15 +49,16 @@ token = ""
 model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # YOLOv11n model
 
 # Configuration
-DETECTION_THRESHOLD = 0.40  # Increased from 0.25 to 0.40 to reduce false positives
+DETECTION_THRESHOLD = 0.40  # Confidence threshold for detections
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv11 input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
 RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
 RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
 INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
+FRAME_SKIP = 3  # Process only every Nth frame for inference (higher = better FPS but less responsive)
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-FPS = 12  # Adjusted for better stability
+FPS = 15  # Target FPS
 DEBUG_MODE = True  # Enable for debugging relay issues
 VERBOSE_OUTPUT = False  # Reduce console output
 SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
@@ -126,10 +127,24 @@ COLOR_NAMES = {
     'unknown': (255, 255, 255)  # White for unknown cats
 }
 
-# Global variables for relay control
+# Global variables
 last_center_activation = 0
 last_action = None
 last_action_time = 0
+last_valid_overlay = None  # Stores the last valid image overlay from the model
+
+# Cache for relay states to prevent unnecessary toggling
+relay_state_cache = {
+    RELAY_PINS['center']: False,
+    RELAY_PINS['left']: False,
+    RELAY_PINS['right']: False
+}
+last_relay_change_time = {
+    RELAY_PINS['center']: 0,
+    RELAY_PINS['left']: 0,
+    RELAY_PINS['right']: 0
+}
+RELAY_HYSTERESIS_TIME = 0.5  # Minimum time between relay state changes (seconds)
 
 # Sound effects for development mode
 SOUND_FILES = [
@@ -792,14 +807,6 @@ def process_actions(frame, detections, fps):
     cv2.putText(annotated_frame, fps_text, (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
     
-    # Default state: turn off all relays when no detections
-    if not DEV_MODE:
-        # Make sure to call set_relay directly
-        set_relay(RELAY_PIN_LEFT, False)
-        set_relay(RELAY_PIN_RIGHT, False)
-        # Center relay is pin 5 according to RELAY_PINS
-        set_relay(RELAY_PINS['center'], False)
-    
     # Process detections if we have any
     if len(detections) > 0:
         if VERBOSE_OUTPUT:
@@ -812,7 +819,38 @@ def process_actions(frame, detections, fps):
         if frame_counter == 0:
             detection_filename = f"detection_{int(time.time())}.jpg"
         
-        # Process each detection
+        # We'll find the primary detection to use for relay control
+        # If multiple cats are detected, use the one with highest confidence
+        primary_detection = max(detections, key=lambda d: d[4])  # d[4] is the confidence
+        x1, y1, x2, y2, score, class_id = primary_detection
+        
+        # Calculate relative position for GPIO control
+        object_center_x = (x1 + x2) / 2
+        relative_position = (object_center_x / frame_width) - 0.5
+        
+        # Set relay states based on object position
+        if not DEV_MODE:
+            # Always activate center relay for any detection
+            set_relay(RELAY_PINS['center'], True)
+            
+            if relative_position < -CENTER_THRESHOLD:
+                # Object is on the left side
+                if DEBUG_MODE and set_relay(RELAY_PIN_LEFT, True):
+                    print("Cat on LEFT side - activating LEFT relay")
+                set_relay(RELAY_PIN_RIGHT, False)
+            elif relative_position > CENTER_THRESHOLD:
+                # Object is on the right side
+                set_relay(RELAY_PIN_LEFT, False)
+                if DEBUG_MODE and set_relay(RELAY_PIN_RIGHT, True):
+                    print("Cat on RIGHT side - activating RIGHT relay")
+            else:
+                # Object is centered
+                set_relay(RELAY_PIN_LEFT, False)
+                set_relay(RELAY_PIN_RIGHT, False)
+                if DEBUG_MODE:
+                    print("Cat in CENTER - directional relays OFF")
+        
+        # Process each detection for display
         for detection in detections:
             x1, y1, x2, y2, score, class_id = detection
             
@@ -837,74 +875,54 @@ def process_actions(frame, detections, fps):
             cv2.rectangle(annotated_frame, (x1, y1-30), (x1+len(label)*15, y1), color, -1)
             cv2.putText(annotated_frame, label, (x1, y1-5), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            
-            # Calculate relative position for GPIO control
-            object_center_x = (x1 + x2) / 2
-            relative_position = (object_center_x / frame_width) - 0.5
-            
-            # Control GPIO based on position
-            if not DEV_MODE:
-                # Activate center relay first for any detection
-                set_relay(RELAY_PINS['center'], True)
-                
-                if relative_position < -CENTER_THRESHOLD:
-                    # Object is on the left side
-                    if DEBUG_MODE:
-                        print("Cat on LEFT side - activating LEFT relay")
-                    set_relay(RELAY_PIN_LEFT, True)
-                    set_relay(RELAY_PIN_RIGHT, False)
-                elif relative_position > CENTER_THRESHOLD:
-                    # Object is on the right side
-                    if DEBUG_MODE:
-                        print("Cat on RIGHT side - activating RIGHT relay")
-                    set_relay(RELAY_PIN_LEFT, False)
-                    set_relay(RELAY_PIN_RIGHT, True)
-                else:
-                    # Object is centered
-                    if DEBUG_MODE:
-                        print("Cat in CENTER - deactivating directional relays")
-                    set_relay(RELAY_PIN_LEFT, False)
-                    set_relay(RELAY_PIN_RIGHT, False)
-            
-            # Draw directional indicators
-            if relative_position < -CENTER_THRESHOLD:
-                # Left indicator
-                direction_text = "MOVE LEFT"
-                cv2.putText(annotated_frame, direction_text, (10, height - 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                # Draw left arrow
-                arrow_start = (width // 4, height - 50)
-                arrow_end = (width // 8, height - 50)
-                cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
-            elif relative_position > CENTER_THRESHOLD:
-                # Right indicator
-                direction_text = "MOVE RIGHT"
-                cv2.putText(annotated_frame, direction_text, (width - 240, height - 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                # Draw right arrow
-                arrow_start = (width // 4 * 3, height - 50)
-                arrow_end = (width // 8 * 7, height - 50)
-                cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
-            else:
-                # Center indicator
-                direction_text = "CENTER"
-                cv2.putText(annotated_frame, direction_text, (width // 2 - 80, height - 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-            
-            # Add position value
-            pos_text = f"Position: {relative_position:.2f}"
-            cv2.putText(annotated_frame, pos_text, (10, height - 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Only save frames periodically to improve performance
-            if frame_counter == 0:
-                # Save the annotated frame
-                cv2.imwrite(detection_filename, annotated_frame)
-                if DEBUG_MODE:
-                    print(f"Saved annotated detection image to {detection_filename}")
+        
+        # Draw directional indicators based on primary detection position
+        if relative_position < -CENTER_THRESHOLD:
+            # Left indicator
+            direction_text = "MOVE LEFT"
+            cv2.putText(annotated_frame, direction_text, (10, height - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+            # Draw left arrow
+            arrow_start = (width // 4, height - 50)
+            arrow_end = (width // 8, height - 50)
+            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
+        elif relative_position > CENTER_THRESHOLD:
+            # Right indicator
+            direction_text = "MOVE RIGHT"
+            cv2.putText(annotated_frame, direction_text, (width - 240, height - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+            # Draw right arrow
+            arrow_start = (width // 4 * 3, height - 50)
+            arrow_end = (width // 8 * 7, height - 50)
+            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
+        else:
+            # Center indicator
+            direction_text = "CENTER"
+            cv2.putText(annotated_frame, direction_text, (width // 2 - 80, height - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+        
+        # Add position value
+        pos_text = f"Position: {relative_position:.2f}"
+        cv2.putText(annotated_frame, pos_text, (10, height - 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # Only save frames periodically to improve performance
+        if frame_counter == 0:
+            # Save the annotated frame
+            cv2.imwrite(detection_filename, annotated_frame)
+            if DEBUG_MODE:
+                print(f"Saved annotated detection image to {detection_filename}")
     else:
-        if DEBUG_MODE:
-            print("No detections - all relays OFF")
+        # No detections found, turn off all relays
+        if not DEV_MODE:
+            # Turn off relays when no detections are found
+            # Only print debug messages if the relay state actually changes
+            if set_relay(RELAY_PINS['center'], False) and DEBUG_MODE:
+                print("No detections - center relay OFF")
+            if set_relay(RELAY_PIN_LEFT, False) and DEBUG_MODE:
+                print("No detections - left relay OFF")
+            if set_relay(RELAY_PIN_RIGHT, False) and DEBUG_MODE:
+                print("No detections - right relay OFF")
     
     # Add timestamp
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1050,18 +1068,47 @@ def init_gpio():
         print(f"Error initializing GPIO: {e}")
         
 def set_relay(pin, state):
-    """Set relay state (True = ON, False = OFF)"""
+    """Set relay state (True = ON, False = OFF) with state caching and hysteresis"""
+    global relay_state_cache, last_relay_change_time
+    
+    # Get current time for hysteresis check
+    current_time = time.time()
+    
+    # Skip if the state hasn't changed
+    if pin in relay_state_cache and relay_state_cache[pin] == state:
+        return False
+    
+    # Apply hysteresis to prevent rapid toggling
+    if pin in last_relay_change_time:
+        time_since_last_change = current_time - last_relay_change_time[pin]
+        if time_since_last_change < RELAY_HYSTERESIS_TIME:
+            if DEBUG_MODE:
+                print(f"Skipping relay {pin} change due to hysteresis ({time_since_last_change:.2f}s < {RELAY_HYSTERESIS_TIME}s)")
+            return False
+    
     try:
         import RPi.GPIO as GPIO
         GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
+        
+        # Update state cache and timestamp
+        relay_state_cache[pin] = state
+        last_relay_change_time[pin] = current_time
+        
         if DEBUG_MODE:
             print(f"Relay {pin} set to {'ON' if state else 'OFF'}")
+        return True
     except (ImportError, NameError):
         # If we can't import GPIO, just print what we would do
         if DEBUG_MODE:
             print(f"Would set relay {pin} to {'ON' if state else 'OFF'}")
+        
+        # Still update the cache for consistent behavior
+        relay_state_cache[pin] = state
+        last_relay_change_time[pin] = current_time
+        return True
     except Exception as e:
         print(f"Error setting relay {pin}: {e}")
+        return False
 
 def cleanup():
     """Clean up resources before exiting"""
@@ -1169,79 +1216,85 @@ def main():
         fps_counter = FPSCounter()
         frame_count = 0
         last_fps_print = time.time()
-        last_inference_time = 0
+        inference_count = 0
         
         # Main loop
         while True:
-            frame_start_time = time.time()
+            loop_start_time = time.time()
             
             # Read frame from camera
             frame = read_frame(camera)
             
             if frame is None:
-                time.sleep(0.1)
+                time.sleep(0.01)
                 continue
             
-            # Only run inference every other frame to improve frame rate
-            # or if we haven't had a valid detection in a while
+            # We always increment frame count and calculate FPS
             frame_count += 1
-            current_time = time.time()
-            time_since_last_inference = current_time - last_inference_time
-            should_run_inference = (frame_count % 2 == 0) or (time_since_last_inference > 0.5)
-            
-            if should_run_inference:
-                # Update the last inference time
-                last_inference_time = current_time
-                
-                if DEBUG_MODE:
-                    print(f"Running inference at t={current_time:.2f}s")
-                
-                # Perform inference
-                if DEV_MODE:
-                    results = model(frame, conf=DETECTION_THRESHOLD)
-                else:
-                    # Use Degirum's predict_batch method for better performance
-                    results_generator = model.predict_batch([frame])
-                    results = next(results_generator)
-                
-                if DEBUG_MODE:
-                    print(f"Got result type: {type(results)}")
-                
-                # Process detection results
-                detections = process_detections(frame, results)
-                
-                # Apply detection smoothing
-                if not detections:
-                    no_detection_frames += 1
-                    if no_detection_frames <= max_no_detection_frames and last_valid_detections:
-                        if DEBUG_MODE:
-                            print(f"No detections in this frame, using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
-                        detections = last_valid_detections
-                    else:
-                        if DEBUG_MODE:
-                            print("No detections found and no recent valid detections to use")
-                else:
-                    # We have valid detections, reset counter and save for future use
-                    no_detection_frames = 0
-                    last_valid_detections = detections.copy()
-            else:
-                # Use previous detections on frames where we skip inference
-                detections = last_valid_detections
-            
-            # Get FPS
             fps = fps_counter.get_fps()
             
-            # Process actions based on detections (output to relays)
+            # Determine if we should run inference on this frame
+            should_run_inference = (frame_count % FRAME_SKIP == 0)
+            
+            # Run inference if needed
+            if should_run_inference:
+                inference_count += 1
+                inference_start_time = time.time()
+                
+                if DEBUG_MODE and inference_count % 10 == 0:
+                    print(f"Running inference #{inference_count} at t={inference_start_time:.2f}s")
+                
+                # Perform inference
+                try:
+                    if DEV_MODE:
+                        results = model(frame, conf=DETECTION_THRESHOLD)
+                    else:
+                        # Use Degirum's predict_batch method
+                        results_generator = model.predict_batch([frame])
+                        results = next(results_generator)
+                    
+                    # Process detection results
+                    detections = process_detections(frame, results)
+                    
+                    # Apply detection smoothing
+                    if not detections:
+                        no_detection_frames += 1
+                        if no_detection_frames <= max_no_detection_frames and last_valid_detections:
+                            if DEBUG_MODE and no_detection_frames == 1:
+                                print(f"No detections in this frame, using last valid detection")
+                            detections = last_valid_detections
+                        else:
+                            if DEBUG_MODE and no_detection_frames == max_no_detection_frames + 1:
+                                print("No recent valid detections to use")
+                            # Clear detections completely
+                            detections = []
+                    else:
+                        # We have valid detections, reset counter and save for future use
+                        no_detection_frames = 0
+                        last_valid_detections = detections.copy()
+                        
+                    inference_time = time.time() - inference_start_time
+                    if DEBUG_MODE and inference_count % 10 == 0:
+                        print(f"Inference took {inference_time*1000:.1f}ms")
+                except Exception as e:
+                    print(f"Error during inference: {e}")
+                    detections = last_valid_detections if no_detection_frames <= max_no_detection_frames else []
+            else:
+                # Reuse last detections when skipping inference
+                detections = last_valid_detections if no_detection_frames <= max_no_detection_frames else []
+            
+            # Process actions and update display regardless of whether we did inference
             processed_frame = process_actions(frame, detections, fps)
             
-            # Only save an FPS report image every 5 seconds
-            if current_time - last_fps_print >= 5.0:
+            # Only save FPS report periodically
+            current_time = time.time()
+            if current_time - last_fps_print >= 10.0:  # Every 10 seconds
                 print(f"Current FPS: {fps:.1f}")
                 cv2.imwrite(f"fps_report_{int(current_time)}.jpg", processed_frame)
                 last_fps_print = current_time
             
-            # Calculate time spent on this frame and sleep if needed
-            frame_time = time.time() - frame_start_time
+            # Sleep to maintain target FPS
+            frame_time = time.time() - loop_start_time
             sleep_time = max(0, (1.0 / FPS) - frame_time)
             if sleep_time > 0:
                 time.sleep(sleep_time)
