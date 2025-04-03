@@ -14,6 +14,11 @@ import sys
 # Development mode flag - set to True when developing on MacBook
 DEV_MODE = False  # Set to False for Raspberry Pi deployment
 
+# Check if running in headless mode (without display)
+HEADLESS_MODE = os.environ.get('DISPLAY', '') == ''
+if HEADLESS_MODE:
+    print("Running in headless mode - no display window will be shown")
+
 # Import Raspberry Pi specific modules only in production mode
 if not DEV_MODE:
     try:
@@ -199,7 +204,49 @@ def process_detections(frame, results):
         
         # Try different ways to access detections
         try:
-            if hasattr(results, 'detections'):
+            if hasattr(results, 'results') and results.results:
+                print(f"DEBUG: Found 'results' attribute with {len(results.results)} items")
+                # Process results attribute
+                for detection in results.results:
+                    try:
+                        print(f"DEBUG: Result item type: {type(detection)}, dir: {dir(detection)}")
+                        
+                        # Extract bounding box, score and class ID based on what's available
+                        if hasattr(detection, 'bbox'):
+                            # If bbox is an object
+                            if hasattr(detection.bbox, 'x1'):
+                                x1 = int(detection.bbox.x1)
+                                y1 = int(detection.bbox.y1)
+                                x2 = int(detection.bbox.x2)
+                                y2 = int(detection.bbox.y2)
+                            # If bbox is a list/tuple
+                            else:
+                                x1 = int(detection.bbox[0])
+                                y1 = int(detection.bbox[1])
+                                x2 = int(detection.bbox[2])
+                                y2 = int(detection.bbox[3])
+                                
+                            # Get score and class ID
+                            if hasattr(detection, 'confidence'):
+                                score = float(detection.confidence)
+                            elif hasattr(detection, 'score'):
+                                score = float(detection.score)
+                            else:
+                                score = 0.0
+                                
+                            if hasattr(detection, 'class_id'):
+                                class_id = int(detection.class_id)
+                            elif hasattr(detection, 'category_id'):
+                                class_id = int(detection.category_id)
+                            else:
+                                class_id = 0
+                                
+                            detections.append((x1, y1, x2, y2, score, class_id))
+                            print(f"DEBUG: Added detection: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score}, class={class_id}")
+                    except Exception as e:
+                        print(f"DEBUG: Error processing detection: {e}")
+                        
+            elif hasattr(results, 'detections'):
                 print(f"DEBUG: Found 'detections' attribute with {len(results.detections)} items")
                 # Iterate through detections if available
                 for detection in results.detections:
@@ -220,13 +267,6 @@ def process_detections(frame, results):
                     except Exception as e:
                         print(f"DEBUG: Error processing detection: {e}")
             
-            # Try alternative ways to access detections if the above didn't work
-            elif hasattr(results, 'results'):
-                print(f"DEBUG: Found 'results' attribute")
-                for detection in results.results:
-                    print(f"DEBUG: Processing result item: {detection}")
-                    # Process detection here
-            
             # Try yet another method
             elif hasattr(results, 'bboxes'):
                 print(f"DEBUG: Found 'bboxes' attribute")
@@ -236,16 +276,6 @@ def process_detections(frame, results):
                     class_id = results.class_ids[i]
                     x1, y1, x2, y2 = map(int, bbox)
                     detections.append((x1, y1, x2, y2, score, class_id))
-            
-            # Try direct iteration
-            else:
-                try:
-                    print(f"DEBUG: Trying direct iteration")
-                    for detection in results:
-                        print(f"DEBUG: Detection item: {detection}")
-                        # Process detection here
-                except Exception as e:
-                    print(f"DEBUG: Error during iteration: {e}")
         
         except Exception as e:
             print(f"DEBUG: Error in process_detections: {e}")
@@ -439,6 +469,11 @@ try:
                     # Handle detection and relay control
                     relative_position = handle_detection([x1, y1, x2, y2], frame_width)
                     draw_overlay(display_frame, relative_position)
+                
+                # Always save frames with detections
+                detection_filename = f"detection_{int(time.time())}.jpg"
+                cv2.imwrite(detection_filename, display_frame)
+                print(f"DEBUG: Saved detection to {detection_filename}")
             else:
                 print("DEBUG: No detections found")
             
@@ -458,19 +493,16 @@ try:
             cv2.putText(display_frame, fps_text, (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['green'], 2)
             
-            # Display the frame
-            try:
-                print("DEBUG: Attempting to show frame...")
-                cv2.imshow("Object Detection", display_frame)
-                print("DEBUG: Frame displayed successfully")
-            except Exception as e:
-                print(f"DEBUG: Error displaying frame: {e}")
-                # Save the frame to file if we can't display it (headless mode)
-                if len(detections) > 0:
-                    cv2.imwrite("detection_frame.jpg", display_frame)
-                    print("DEBUG: Saved detection frame to detection_frame.jpg")
+            # Display the frame or handle headless mode
+            if HEADLESS_MODE:
+                # In headless mode, don't try to show frame
+                key = ord('c')  # dummy key to continue
+            else:
+                # Try to show frame if display is available
+                show_frame(display_frame)
+                key = cv2.waitKey(1) & 0xFF
             
-            key = cv2.waitKey(1) & 0xFF
+            # Check for quit
             if key == ord("q"):
                 print("\nQuitting program...")
                 break
@@ -495,3 +527,25 @@ except Exception as e:
         pygame.mixer.quit()
     
 print("Resources cleaned up")
+
+def show_frame(frame, title="Object Detection"):
+    """Safely display a frame or save it in headless mode"""
+    if HEADLESS_MODE:
+        # Save the frame periodically in headless mode
+        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
+            cv2.imwrite("latest_frame.jpg", frame)
+            print("DEBUG: Saved latest frame to latest_frame.jpg")
+        # Save detection frames whenever they occur
+        return False
+    
+    try:
+        cv2.imshow(title, frame)
+        cv2.waitKey(1)  # Process any pending events
+        return True
+    except Exception as e:
+        print(f"DEBUG: Error displaying frame: {e}")
+        # Save the frame periodically in headless mode
+        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
+            cv2.imwrite("latest_frame.jpg", frame)
+            print("DEBUG: Saved latest frame to latest_frame.jpg")
+        return False
