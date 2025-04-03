@@ -188,19 +188,20 @@ def process_detections(frame, results):
                 detections.append((x1, y1, x2, y2, score, class_id))
     else:
         # Process Degirum results
-        # Each result is a DetectionResults object
-        for detection in results.detections:
-            # Get bounding box coordinates
-            x1 = int(detection.bbox.x1)
-            y1 = int(detection.bbox.y1)
-            x2 = int(detection.bbox.x2)
-            y2 = int(detection.bbox.y2)
-            
-            # Get score and class ID
-            score = float(detection.confidence)
-            class_id = int(detection.class_id)
-            
-            detections.append((x1, y1, x2, y2, score, class_id))
+        if hasattr(results, 'detections'):
+            # Iterate through detections if available
+            for detection in results.detections:
+                # Get bounding box coordinates
+                x1 = int(detection.bbox.x1)
+                y1 = int(detection.bbox.y1)
+                x2 = int(detection.bbox.x2)
+                y2 = int(detection.bbox.y2)
+                
+                # Get score and class ID
+                score = float(detection.confidence)
+                class_id = int(detection.class_id)
+                
+                detections.append((x1, y1, x2, y2, score, class_id))
     return detections
 
 def activate_relay(pin, duration=0.1):
@@ -346,8 +347,12 @@ try:
             if DEV_MODE:
                 results = model(frame, conf=CONFIDENCE_THRESHOLD)
             else:
-                # Use Degirum's predict_batch method
-                results = model.predict_batch([frame])
+                # Use Degirum's predict_batch method which returns a generator
+                prediction_generator = model.predict_batch([frame])
+                # Get the first result from the generator
+                for result in prediction_generator:
+                    results = result
+                    break
             
             # Process detections
             detections = process_detections(frame, results)
