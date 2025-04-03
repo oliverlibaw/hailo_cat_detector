@@ -137,43 +137,46 @@ def play_sound():
             print(f"Error playing sound: {e}")
 
 def setup_camera():
-    """Set up the camera with proper error handling"""
+    """Setup camera for capture"""
     if DEV_MODE:
-        print("Attempting to access webcam...")
-        print("Note: On macOS, you may need to grant camera permissions to Terminal/IDE")
-        print("If the camera doesn't work, try running this script from Terminal")
+        print("Setting up camera for development mode...")
+        camera = cv2.VideoCapture(0)
         
-        # Try different camera indices
-        for i in range(3):  # Try first 3 camera indices
-            try:
-                cap = cv2.VideoCapture(i, cv2.CAP_AVFOUNDATION)  # Use AVFoundation backend on macOS
-                if cap.isOpened():
-                    print(f"Successfully opened camera {i}")
-                    return cap
-            except Exception as e:
-                print(f"Failed to open camera {i}: {str(e)}")
-                continue
+        # Set camera resolution
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
         
-        raise Exception("Could not open webcam")
+        # Check if camera opened successfully
+        if not camera.isOpened():
+            print("Error: Could not open camera.")
+            sys.exit(1)
+        
+        print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
+        return camera
     else:
+        print("Setting up Pi camera...")
         try:
-            print("Setting up Pi camera...")
+            from picamera2 import Picamera2
+            
+            # Create and configure Picamera2
             picam2 = Picamera2()
             
-            # Configure camera
+            # Configure camera with preview configuration
             camera_config = picam2.create_preview_configuration(
-                main={"format": 'RGB888', "size": MODEL_INPUT_SIZE}
+                main={"format": "RGB888", "size": (FRAME_WIDTH, FRAME_HEIGHT)}
             )
+            
+            # Apply the configuration
             picam2.configure(camera_config)
+            
+            # Start the camera
             picam2.start()
-            print("Successfully initialized Pi camera")
+            
+            print(f"Pi camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
             return picam2
         except Exception as e:
-            print(f"Failed to setup Pi camera: {e}")
-            print("Please ensure:")
-            print("1. Camera is enabled in raspi-config")
-            print("2. You have the necessary permissions")
-            print("3. The camera is properly connected")
+            print(f"Error setting up Pi camera: {e}")
+            print("Please check that the camera is properly connected and enabled")
             raise
 
 def setup_gpio():
@@ -1081,14 +1084,32 @@ def test_model_on_sample(model):
 def read_frame(camera):
     """Read a frame from the camera"""
     try:
-        # Get frame from camera
-        ret, frame = camera.read()
-        
-        if not ret:
-            print("Failed to capture frame")
-            return None
+        if DEV_MODE:
+            # OpenCV camera in dev mode
+            ret, frame = camera.read()
             
-        return frame
+            if not ret:
+                print("Failed to capture frame")
+                return None
+                
+            return frame
+        else:
+            # Picamera2 in production mode
+            try:
+                # Get frame directly from Picamera2
+                frame = camera.capture_array()
+                
+                # Convert from RGB to BGR for OpenCV
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                
+                # Resize if needed
+                if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
+                    frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+                
+                return frame
+            except Exception as e:
+                print(f"Error capturing frame from Pi camera: {e}")
+                return None
     except Exception as e:
         print(f"Error reading frame: {e}")
         return None
