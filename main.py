@@ -392,6 +392,28 @@ def signal_handler(sig, frame):
 # Register signal handler
 signal.signal(signal.SIGINT, signal_handler)
 
+def show_frame(frame, title="Object Detection"):
+    """Safely display a frame or save it in headless mode"""
+    if HEADLESS_MODE:
+        # Save the frame periodically in headless mode
+        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
+            cv2.imwrite("latest_frame.jpg", frame)
+            print("DEBUG: Saved latest frame to latest_frame.jpg")
+        # Save detection frames whenever they occur
+        return False
+    
+    try:
+        cv2.imshow(title, frame)
+        cv2.waitKey(1)  # Process any pending events
+        return True
+    except Exception as e:
+        print(f"DEBUG: Error displaying frame: {e}")
+        # Save the frame periodically in headless mode
+        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
+            cv2.imwrite("latest_frame.jpg", frame)
+            print("DEBUG: Saved latest frame to latest_frame.jpg")
+        return False
+
 try:
     # Load AI model with proper error handling
     model = load_model()
@@ -527,25 +549,3 @@ except Exception as e:
         pygame.mixer.quit()
     
 print("Resources cleaned up")
-
-def show_frame(frame, title="Object Detection"):
-    """Safely display a frame or save it in headless mode"""
-    if HEADLESS_MODE:
-        # Save the frame periodically in headless mode
-        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
-            cv2.imwrite("latest_frame.jpg", frame)
-            print("DEBUG: Saved latest frame to latest_frame.jpg")
-        # Save detection frames whenever they occur
-        return False
-    
-    try:
-        cv2.imshow(title, frame)
-        cv2.waitKey(1)  # Process any pending events
-        return True
-    except Exception as e:
-        print(f"DEBUG: Error displaying frame: {e}")
-        # Save the frame periodically in headless mode
-        if time.time() % 5 < 0.5:  # Save roughly every 5 seconds
-            cv2.imwrite("latest_frame.jpg", frame)
-            print("DEBUG: Saved latest frame to latest_frame.jpg")
-        return False
