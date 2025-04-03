@@ -518,8 +518,8 @@ def load_model():
     try:
         if USE_COCO_MODEL:
             print("Loading YOLOv8n COCO model for Hailo accelerator...")
-            model_to_load = "yolov8n_coco"
-            zoo_path = "degirum/public"  # Use public model zoo for COCO model
+            model_to_load = "yolov8n_coco--640x640_quant_hailort_hailo8l_1"  # Use specific .hef model
+            zoo_path = "/home/pi5/degirum_model_zoo"  # Use local path where the model exists
         else:
             print("Loading custom cat model for Hailo accelerator...")
             model_to_load = model_name
@@ -535,6 +535,13 @@ def load_model():
             
         print(f"Model zoo path verified: {zoo_path}")
         print(f"Attempting to load model: {model_to_load}")
+        
+        # Check if the specific model path exists
+        specific_model_path = os.path.join(zoo_path, model_to_load)
+        if os.path.exists(specific_model_path):
+            print(f"Found model at: {specific_model_path}")
+        else:
+            print(f"WARNING: Specific model path not found: {specific_model_path}")
         
         # List available models if possible
         try:
@@ -584,7 +591,42 @@ def load_fallback_model():
         print("Attempting to load a fallback model...")
         import degirum as dg
         
-        # Try to load a generic model
+        # Use the local zoo path
+        zoo_path = "/home/pi5/degirum_model_zoo"
+        
+        # Try to list all models in the directory
+        try:
+            print(f"Looking for fallback models in: {zoo_path}")
+            available_models = os.listdir(zoo_path)
+            print(f"Available models: {available_models}")
+            
+            # Filter for .hef models or other known model formats
+            potential_models = []
+            for model_name in available_models:
+                # Add any model that looks like a compiled model
+                if model_name != "yolov8n_coco--640x640_quant_hailort_hailo8l_1":  # Skip the main model that failed
+                    potential_models.append(model_name)
+            
+            # Try each potential model
+            for model_name in potential_models:
+                try:
+                    print(f"Trying to load fallback model: {model_name}")
+                    model = dg.load_model(
+                        model_name=model_name,
+                        inference_host_address=inference_host_address,
+                        zoo_url=zoo_path,
+                        output_confidence_threshold=DETECTION_THRESHOLD
+                        # No overlay parameters to avoid compatibility issues
+                    )
+                    print(f"Successfully loaded fallback model: {model_name}")
+                    return model
+                except Exception as e:
+                    print(f"Failed to load {model_name}: {e}")
+                    continue
+        except Exception as e:
+            print(f"Failed to list models in directory: {e}")
+        
+        # If local models fail, try models from the public repository
         generic_models = [
             "yolov8n", 
             "yolov8n_coco", 
@@ -593,6 +635,7 @@ def load_fallback_model():
             "mobilenet_v2_ssd_coco"
         ]
         
+        print("Trying models from the public repository...")
         for generic_model in generic_models:
             try:
                 print(f"Trying to load generic model: {generic_model}")
@@ -600,7 +643,7 @@ def load_fallback_model():
                     model_name=generic_model,
                     inference_host_address=inference_host_address,
                     zoo_url="degirum/public",  # Use public model zoo
-                    output_confidence_threshold=0.1
+                    output_confidence_threshold=DETECTION_THRESHOLD
                     # No overlay parameters to avoid compatibility issues
                 )
                 print(f"Successfully loaded fallback model: {generic_model}")
