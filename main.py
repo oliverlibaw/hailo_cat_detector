@@ -200,6 +200,7 @@ def process_detections(frame, results):
     else:
         # Process Degirum results
         try:
+            # Check if there are results in the standard results list
             if hasattr(results, 'results') and results.results:
                 print(f"Processing {len(results.results)} detections")
                 
@@ -261,39 +262,106 @@ def process_detections(frame, results):
                             print(f"Method 2 - Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
                             detections.append((x1, y1, x2, y2, score, class_id))
                             continue
-                        
-                        # Method 3: Try to access via image_overlay if available
-                        if hasattr(detection, 'image_overlay'):
-                            print("Found image_overlay attribute, but can't extract coordinates directly")
-                            continue
-                            
-                        # If we got here, print the detection object to see what it contains
-                        print(f"Couldn't process detection: {detection}")
-                        if hasattr(detection, '__dict__'):
-                            print(f"Detection __dict__: {detection.__dict__}")
                             
                     except Exception as e:
                         print(f"Error processing detection: {e}")
                         import traceback
                         traceback.print_exc()
+            
+            # If we still have no detections but have an image_overlay, try to use that
+            if len(detections) == 0 and hasattr(results, 'image_overlay') and results.image_overlay is not None:
+                print("Using image_overlay for detection information")
                 
-            # If we still have no detections, try alternate approaches        
-            elif hasattr(results, 'bboxes') and hasattr(results, 'scores'):
-                print(f"Using bboxes/scores attributes")
-                for i in range(len(results.bboxes)):
-                    bbox = results.bboxes[i]
-                    score = results.scores[i]
-                    class_id = results.class_ids[i] if hasattr(results, 'class_ids') else 0
-                    x1, y1, x2, y2 = map(int, bbox)
-                    
-                    cat_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-                    print(f"Alt method - Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
-                    detections.append((x1, y1, x2, y2, score, class_id))
-                    
-            # Try direct access to the image overlay if available
-            elif hasattr(results, 'image_overlay') and results.image_overlay is not None:
-                print("Using image_overlay, but can't extract coordinates for detections")
+                # Create a copy of the primary frame
+                debug_frame = frame.copy()
                 
+                # Save both frames for comparison
+                cv2.imwrite("debug_original_frame.jpg", frame)
+                
+                if isinstance(results.image_overlay, np.ndarray):
+                    # Save the raw overlay from the model
+                    cv2.imwrite("debug_model_overlay.jpg", results.image_overlay)
+                    
+                    # If the model has detections, they should be visible in the overlay
+                    # Analyze difference between original frame and overlay to find bounding boxes
+                    if frame.shape == results.image_overlay.shape:
+                        # Convert both to grayscale for comparison
+                        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        overlay_gray = cv2.cvtColor(results.image_overlay, cv2.COLOR_BGR2GRAY)
+                        
+                        # Calculate absolute difference
+                        diff = cv2.absdiff(frame_gray, overlay_gray)
+                        cv2.imwrite("debug_frame_diff.jpg", diff)
+                        
+                        # Threshold to find areas of difference (where boxes and text might be)
+                        _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+                        cv2.imwrite("debug_threshold.jpg", thresh)
+                        
+                        # Find contours in the difference image
+                        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        
+                        # Filter and process contours to find bounding boxes
+                        potential_boxes = []
+                        for i, contour in enumerate(contours):
+                            # Filter out small contours that might be noise
+                            area = cv2.contourArea(contour)
+                            if area > 200:  # Lower threshold to catch smaller boxes
+                                x, y, w, h = cv2.boundingRect(contour)
+                                
+                                # Filter out likely non-bounding box contours
+                                aspect_ratio = float(w) / h if h > 0 else 0
+                                
+                                # Only keep contours that might be bounding boxes (reasonable aspect ratio)
+                                if 0.2 < aspect_ratio < 5.0 and w > 20 and h > 20:
+                                    potential_boxes.append((x, y, w, h, area))
+                        
+                        # Merge overlapping boxes to find complete bounding boxes
+                        merged_boxes = []
+                        
+                        # Sort by area (largest first)
+                        potential_boxes.sort(key=lambda box: box[4], reverse=True)
+                        
+                        # Take the top 5 largest contours that might be bounding boxes
+                        for i, box in enumerate(potential_boxes[:5]):
+                            x, y, w, h, area = box
+                            
+                            # Create a synthetic detection with assumed values
+                            # Since we don't have class or score info, use defaults
+                            x1, y1, x2, y2 = x, y, x+w, y+h
+                            score = 0.5  # Assumed score for now
+                            class_id = 0  # Assumed class ID (first class)
+                            
+                            print(f"Potential detection from overlay: bbox={x1},{y1},{x2},{y2}, area={area}")
+                            
+                            # Draw on debug frame with different colors to distinguish boxes
+                            color = (0, 255-i*50, i*50)  # Different color for each box
+                            cv2.rectangle(debug_frame, (x1, y1), (x2, y2), color, 2)
+                            cv2.putText(debug_frame, f"#{i}: {area}", (x1, y1-10), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            
+                            # Add to detections if it's a large enough area (more likely to be a real detection)
+                            if area > 1000:  # Higher threshold for final detections
+                                detections.append((x1, y1, x2, y2, score, class_id))
+                                merged_boxes.append((x1, y1, x2, y2))
+                        
+                        # Save the debug frame with extracted boxes
+                        cv2.imwrite("debug_extracted_boxes.jpg", debug_frame)
+                        
+                        # Create another debug image with the overlay side by side with our boxes
+                        if results.image_overlay.shape == debug_frame.shape:
+                            comparison = np.hstack((results.image_overlay, debug_frame))
+                            cv2.imwrite("debug_comparison.jpg", comparison)
+                
+                # If we found any detections, use them
+                if len(detections) > 0:
+                    print(f"Extracted {len(detections)} detections from image overlay")
+                else:
+                    print("Could not extract detections from image overlay")
+                    
+                    # Last resort - use the overlay directly for display
+                    # This won't give us detection coordinates, but at least shows what the model sees
+                    print("Using overlay directly for display")
+            
             # Last resort - dump everything about the results object
             if len(detections) == 0:
                 print(f"No detections found. Results dump:")
