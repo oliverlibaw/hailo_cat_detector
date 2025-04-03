@@ -131,6 +131,19 @@ def setup_camera():
             print("3. The camera is properly connected")
             raise
 
+def setup_gpio():
+    """Initialize GPIO pins for relays"""
+    if not DEV_MODE:
+        try:
+            GPIO.setmode(GPIO.BCM)
+            for pin in RELAY_PINS.values():
+                GPIO.setup(pin, GPIO.OUT)
+                GPIO.output(pin, GPIO.LOW)  # Initialize all relays to OFF
+            print("Successfully initialized GPIO pins")
+        except Exception as e:
+            print(f"Failed to setup GPIO: {e}")
+            raise
+
 def cleanup_camera(camera):
     """Cleanup camera based on mode"""
     if DEV_MODE:
@@ -154,6 +167,8 @@ def get_frame(camera):
     else:
         try:
             frame = camera.capture_array()
+            # Convert from RGB to BGR for OpenCV
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             return frame
         except Exception as e:
             print(f"Failed to capture frame from Pi camera: {e}")
@@ -281,7 +296,9 @@ try:
     model = load_model()
     setup_sound()
     
-    # Setup camera
+    # Setup GPIO and camera
+    if not DEV_MODE:
+        setup_gpio()
     camera = setup_camera()
     
     # Print model info
