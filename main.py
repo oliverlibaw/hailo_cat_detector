@@ -111,16 +111,36 @@ def setup_camera():
         
         raise Exception("Could not open webcam")
     else:
-        # Production mode camera setup
-        return None  # Will be implemented later
+        try:
+            print("Setting up Pi camera...")
+            picam2 = Picamera2()
+            
+            # Configure camera
+            camera_config = picam2.create_preview_configuration(
+                main={"format": 'RGB888', "size": MODEL_INPUT_SIZE}
+            )
+            picam2.configure(camera_config)
+            picam2.start()
+            print("Successfully initialized Pi camera")
+            return picam2
+        except Exception as e:
+            print(f"Failed to setup Pi camera: {e}")
+            print("Please ensure:")
+            print("1. Camera is enabled in raspi-config")
+            print("2. You have the necessary permissions")
+            print("3. The camera is properly connected")
+            raise
 
 def cleanup_camera(camera):
     """Cleanup camera based on mode"""
     if DEV_MODE:
         camera.release()
     else:
-        camera.stop()
-        GPIO.cleanup()
+        try:
+            camera.stop()
+            GPIO.cleanup()
+        except Exception as e:
+            print(f"Error during camera cleanup: {e}")
 
 def get_frame(camera):
     """Get frame from camera based on mode"""
@@ -132,7 +152,12 @@ def get_frame(camera):
         frame = cv2.resize(frame, MODEL_INPUT_SIZE)
         return frame
     else:
-        return camera.capture_array()
+        try:
+            frame = camera.capture_array()
+            return frame
+        except Exception as e:
+            print(f"Failed to capture frame from Pi camera: {e}")
+            raise
 
 def activate_relay(pin, duration=0.1):
     """Activate a relay for the specified duration"""
