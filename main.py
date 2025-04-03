@@ -57,10 +57,11 @@ RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
 INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-FPS = 15  # Reduced from 25 to 15 for better performance
-DEBUG_MODE = False  # Turn off debug mode to reduce console output
-VERBOSE_OUTPUT = True  # Turn on verbose output temporarily for debugging
+FPS = 12  # Adjusted for better stability
+DEBUG_MODE = True  # Enable for debugging relay issues
+VERBOSE_OUTPUT = False  # Reduce console output
 SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
+SAVE_INTERVAL = 10  # Only save every 10th frame with detections to improve performance
 
 # Cat class names
 CAT_CLASSES = {
@@ -786,16 +787,30 @@ def process_actions(frame, detections, fps):
     cv2.line(annotated_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
     
     # Add header with FPS
-    fps_text = f"FPS: {fps:.2f}"
+    fps_text = f"FPS: {fps:.1f}"
     cv2.rectangle(annotated_frame, (0, 0), (200, 40), (0, 0, 0), -1)
     cv2.putText(annotated_frame, fps_text, (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
     
+    # Default state: turn off all relays when no detections
+    if not DEV_MODE:
+        # Make sure to call set_relay directly
+        set_relay(RELAY_PIN_LEFT, False)
+        set_relay(RELAY_PIN_RIGHT, False)
+        # Center relay is pin 5 according to RELAY_PINS
+        set_relay(RELAY_PINS['center'], False)
+    
+    # Process detections if we have any
     if len(detections) > 0:
-        print(f"Detected {len(detections)} objects")
+        if VERBOSE_OUTPUT:
+            print(f"Detected {len(detections)} objects")
         
-        # Save detection frame
-        detection_filename = f"detection_{int(time.time())}.jpg"
+        # Frame counter for limiting saved images
+        frame_counter = int(time.time()) % SAVE_INTERVAL
+        
+        # Only save frames periodically to improve performance
+        if frame_counter == 0:
+            detection_filename = f"detection_{int(time.time())}.jpg"
         
         # Process each detection
         for detection in detections:
@@ -807,8 +822,8 @@ def process_actions(frame, detections, fps):
             else:
                 class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
             
-            # Print detection details
-            print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
+            if VERBOSE_OUTPUT:
+                print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
             
             # Draw detection on the annotated frame
             color_index = class_id % len(COLORS)
@@ -829,16 +844,25 @@ def process_actions(frame, detections, fps):
             
             # Control GPIO based on position
             if not DEV_MODE:
+                # Activate center relay first for any detection
+                set_relay(RELAY_PINS['center'], True)
+                
                 if relative_position < -CENTER_THRESHOLD:
                     # Object is on the left side
+                    if DEBUG_MODE:
+                        print("Cat on LEFT side - activating LEFT relay")
                     set_relay(RELAY_PIN_LEFT, True)
                     set_relay(RELAY_PIN_RIGHT, False)
                 elif relative_position > CENTER_THRESHOLD:
                     # Object is on the right side
+                    if DEBUG_MODE:
+                        print("Cat on RIGHT side - activating RIGHT relay")
                     set_relay(RELAY_PIN_LEFT, False)
                     set_relay(RELAY_PIN_RIGHT, True)
                 else:
                     # Object is centered
+                    if DEBUG_MODE:
+                        print("Cat in CENTER - deactivating directional relays")
                     set_relay(RELAY_PIN_LEFT, False)
                     set_relay(RELAY_PIN_RIGHT, False)
             
@@ -871,11 +895,21 @@ def process_actions(frame, detections, fps):
             pos_text = f"Position: {relative_position:.2f}"
             cv2.putText(annotated_frame, pos_text, (10, height - 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Save the annotated frame
-        cv2.imwrite(detection_filename, annotated_frame)
-        print(f"Saved frame to {detection_filename}")
-        print(f"Saved annotated detection image to {detection_filename}")
+            
+            # Only save frames periodically to improve performance
+            if frame_counter == 0:
+                # Save the annotated frame
+                cv2.imwrite(detection_filename, annotated_frame)
+                if DEBUG_MODE:
+                    print(f"Saved annotated detection image to {detection_filename}")
+    else:
+        if DEBUG_MODE:
+            print("No detections - all relays OFF")
+    
+    # Add timestamp
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    cv2.putText(annotated_frame, timestamp, (width - 250, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     return annotated_frame
 
@@ -995,49 +1029,6 @@ def read_frame(camera):
         print(f"Error reading frame: {e}")
         return None
 
-def setup_camera():
-    """Setup camera for capture"""
-    if DEV_MODE:
-        print("Setting up camera for development mode...")
-        camera = cv2.VideoCapture(0)
-        
-        # Set camera resolution
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-        
-        # Check if camera opened successfully
-        if not camera.isOpened():
-            print("Error: Could not open camera.")
-            sys.exit(1)
-        
-        print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
-        return camera
-    else:
-        print("Setting up Pi camera...")
-        try:
-            from picamera2 import Picamera2
-            
-            # Create and configure Picamera2
-            picam2 = Picamera2()
-            
-            # Configure camera with preview configuration
-            camera_config = picam2.create_preview_configuration(
-                main={"format": "RGB888", "size": (FRAME_WIDTH, FRAME_HEIGHT)}
-            )
-            
-            # Apply the configuration
-            picam2.configure(camera_config)
-            
-            # Start the camera
-            picam2.start()
-            
-            print(f"Pi camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
-            return picam2
-        except Exception as e:
-            print(f"Error setting up Pi camera: {e}")
-            print("Please check that the camera is properly connected and enabled")
-            raise
-
 def init_gpio():
     """Initialize GPIO pins for relay control"""
     try:
@@ -1045,12 +1036,14 @@ def init_gpio():
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(RELAY_PIN_LEFT, GPIO.OUT)
         GPIO.setup(RELAY_PIN_RIGHT, GPIO.OUT)
+        GPIO.setup(RELAY_PINS['center'], GPIO.OUT)  # Setup center relay
         
-        # Initialize both relays to off
+        # Initialize all relays to off
         GPIO.output(RELAY_PIN_LEFT, GPIO.LOW)
         GPIO.output(RELAY_PIN_RIGHT, GPIO.LOW)
+        GPIO.output(RELAY_PINS['center'], GPIO.LOW)
         
-        print(f"GPIO initialized: left relay on pin {RELAY_PIN_LEFT}, right relay on pin {RELAY_PIN_RIGHT}")
+        print(f"GPIO initialized: center relay on pin {RELAY_PINS['center']}, left relay on pin {RELAY_PIN_LEFT}, right relay on pin {RELAY_PIN_RIGHT}")
     except ImportError:
         print("WARNING: RPi.GPIO module not available, GPIO control disabled")
     except Exception as e:
@@ -1137,7 +1130,8 @@ def main():
         print_header()
         
         # Test DeGirum and Hailo setup first
-        test_degirum_setup()
+        if not DEV_MODE:
+            test_degirum_setup()
         
         # Load AI model with proper error handling
         model = load_model()
@@ -1155,9 +1149,8 @@ def main():
         # Configure camera
         camera = setup_camera()
         
-        # Test model on a sample image
-        if os.path.exists("sample_cat.jpg"):
-            print("Testing model on sample image...")
+        # Test model on a sample image if it exists
+        if os.path.exists("sample_cat.jpg") and not DEV_MODE:
             test_model_on_sample(model)
         
         # Initialize GPIO if not in dev mode
@@ -1170,63 +1163,98 @@ def main():
         # Initialize variables for smoothing detections
         last_valid_detections = []
         no_detection_frames = 0
-        max_no_detection_frames = 3  # Number of frames to keep using last detection
+        max_no_detection_frames = 3  # Keep using last detection for 3 frames
+        
+        # Track performance metrics
+        fps_counter = FPSCounter()
+        frame_count = 0
+        last_fps_print = time.time()
+        last_inference_time = 0
         
         # Main loop
-        try:
-            fps_counter = FPSCounter()
-            while True:
-                # Read frame from camera
-                frame = read_frame(camera)
+        while True:
+            frame_start_time = time.time()
+            
+            # Read frame from camera
+            frame = read_frame(camera)
+            
+            if frame is None:
+                time.sleep(0.1)
+                continue
+            
+            # Only run inference every other frame to improve frame rate
+            # or if we haven't had a valid detection in a while
+            frame_count += 1
+            current_time = time.time()
+            time_since_last_inference = current_time - last_inference_time
+            should_run_inference = (frame_count % 2 == 0) or (time_since_last_inference > 0.5)
+            
+            if should_run_inference:
+                # Update the last inference time
+                last_inference_time = current_time
                 
-                if frame is None:
-                    print("Failed to capture frame")
-                    time.sleep(0.1)
-                    continue
-                
-                # Run detection on the frame
-                t = time.time()
-                print(f"Running inference at t={t}s")
+                if DEBUG_MODE:
+                    print(f"Running inference at t={current_time:.2f}s")
                 
                 # Perform inference
                 if DEV_MODE:
                     results = model(frame, conf=DETECTION_THRESHOLD)
                 else:
-                    # Use Degirum's predict_batch method which returns a generator
+                    # Use Degirum's predict_batch method for better performance
                     results_generator = model.predict_batch([frame])
                     results = next(results_generator)
                 
-                # Process detection results
-                print(f"Got result type: {type(results)}")
+                if DEBUG_MODE:
+                    print(f"Got result type: {type(results)}")
                 
-                # Process detections
+                # Process detection results
                 detections = process_detections(frame, results)
                 
                 # Apply detection smoothing
                 if not detections:
                     no_detection_frames += 1
                     if no_detection_frames <= max_no_detection_frames and last_valid_detections:
-                        print(f"No detections in this frame, using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
+                        if DEBUG_MODE:
+                            print(f"No detections in this frame, using last valid detection (frame {no_detection_frames}/{max_no_detection_frames})")
                         detections = last_valid_detections
                     else:
-                        print("No detections found and no recent valid detections to use")
+                        if DEBUG_MODE:
+                            print("No detections found and no recent valid detections to use")
                 else:
                     # We have valid detections, reset counter and save for future use
                     no_detection_frames = 0
                     last_valid_detections = detections.copy()
-                
-                # Get FPS
-                fps = fps_counter.get_fps()
-                
-                # Process actions based on detections
-                process_actions(frame, detections, fps)
-                
-                # Sleep to maintain desired FPS
-                time.sleep(1.0 / FPS)
-                
-        except KeyboardInterrupt:
-            print("Keyboard interrupt detected. Exiting...")
+            else:
+                # Use previous detections on frames where we skip inference
+                detections = last_valid_detections
             
+            # Get FPS
+            fps = fps_counter.get_fps()
+            
+            # Process actions based on detections (output to relays)
+            processed_frame = process_actions(frame, detections, fps)
+            
+            # Only save an FPS report image every 5 seconds
+            if current_time - last_fps_print >= 5.0:
+                print(f"Current FPS: {fps:.1f}")
+                cv2.imwrite(f"fps_report_{int(current_time)}.jpg", processed_frame)
+                last_fps_print = current_time
+            
+            # Calculate time spent on this frame and sleep if needed
+            frame_time = time.time() - frame_start_time
+            sleep_time = max(0, (1.0 / FPS) - frame_time)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            
+    except KeyboardInterrupt:
+        print("Keyboard interrupt detected. Exiting...")
+        
+        # Make sure to turn off all relays when exiting
+        if not DEV_MODE:
+            set_relay(RELAY_PIN_LEFT, False)
+            set_relay(RELAY_PIN_RIGHT, False)
+            set_relay(RELAY_PINS['center'], False)
+        
     except Exception as e:
         print(f"Error in main loop: {str(e)}")
         import traceback
