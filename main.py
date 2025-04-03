@@ -328,7 +328,7 @@ try:
     print(f"Model input size: {MODEL_INPUT_SIZE}")
     print(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
     print(f"Development mode: {'Enabled' if DEV_MODE else 'Disabled'}")
-    print("\nPress Ctrl+C to stop the program")
+    print("\nPress 'q' to quit or Ctrl+C to stop the program")
     
     start_time = time.time()
     frame_count = 0
@@ -396,9 +396,12 @@ try:
             cv2.putText(display_frame, fps_text, (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['green'], 2)
             
-            # Save frame to file for debugging
-            if len(detections) > 0:
-                cv2.imwrite("debug_frame.jpg", display_frame)
+            # Display the frame
+            cv2.imshow("Object Detection", display_frame)
+            
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                print("\nQuitting program...")
+                break
             
         except Exception as e:
             print(f"Error in main loop: {e}")
@@ -406,6 +409,7 @@ try:
     
     # Clean up
     cleanup_camera(camera)
+    cv2.destroyAllWindows()
     if DEV_MODE:
         pygame.mixer.quit()
     print("Program ended successfully")
@@ -414,6 +418,7 @@ except Exception as e:
     print(f"Error: {e}")
     if 'camera' in locals():
         cleanup_camera(camera)
+    cv2.destroyAllWindows()
     if DEV_MODE:
         pygame.mixer.quit()
     
