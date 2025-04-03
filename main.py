@@ -187,19 +187,22 @@ def process_detections(frame, results):
                 class_id = int(box.cls[0])
                 detections.append((x1, y1, x2, y2, score, class_id))
     else:
-        # Process Degirum results - simpler approach
-        for detection in results:
-            # Get bounding box coordinates
-            x1 = int(detection.bbox[0])
-            y1 = int(detection.bbox[1])
-            x2 = int(detection.bbox[2])
-            y2 = int(detection.bbox[3])
-            
-            # Get score and class ID
-            score = float(detection.score)
-            class_id = int(detection.class_id)
-            
-            detections.append((x1, y1, x2, y2, score, class_id))
+        # Process Degirum results
+        for result in results:
+            # Each result is a DetectionResults object
+            for i in range(len(result.bboxes)):
+                # Get bounding box coordinates
+                bbox = result.bboxes[i]
+                x1 = int(bbox[0])
+                y1 = int(bbox[1])
+                x2 = int(bbox[2])
+                y2 = int(bbox[3])
+                
+                # Get score and class ID
+                score = float(result.scores[i])
+                class_id = int(result.class_ids[i])
+                
+                detections.append((x1, y1, x2, y2, score, class_id))
     return detections
 
 def activate_relay(pin, duration=0.1):
