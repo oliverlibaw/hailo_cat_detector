@@ -49,11 +49,12 @@ token = ""
 model_name = "yolov8n_cats"  # Your custom YOLOv8n model
 
 # Configuration
-CONFIDENCE_THRESHOLD = 0.25  # Confidence Threshold
+CONFIDENCE_THRESHOLD = 0.2  # Lower confidence threshold to detect more objects
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv8n input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
 RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
 RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
+INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
 
 # Cat class names
 CAT_CLASSES = {
@@ -234,9 +235,16 @@ def process_detections(frame, results):
                             else:
                                 class_id = 0
                                 
+                            # Print detailed info about this detection
+                            cat_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+                            print(f"Detection: {cat_name}, bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
+                            
                             detections.append((x1, y1, x2, y2, score, class_id))
                     except Exception as e:
                         print(f"Error processing detection: {e}")
+                        # Print detailed error for debugging
+                        import traceback
+                        traceback.print_exc()
                         
             elif hasattr(results, 'detections'):
                 for detection in results.detections:
@@ -266,7 +274,10 @@ def process_detections(frame, results):
         
         except Exception as e:
             print(f"Error in process_detections: {e}")
+            import traceback
+            traceback.print_exc()
     
+    print(f"Returning {len(detections)} processed detections")
     return detections
 
 def activate_relay(pin, duration=0.1):
@@ -351,12 +362,17 @@ def load_model():
             model_name="yolov8n_cats",
             inference_host_address="@local",  # Use @local for local inference
             zoo_url="/home/pi5/degirum_model_zoo",  # Path to your model zoo
-            output_confidence_threshold=0.3,  # Minimum confidence threshold
+            output_confidence_threshold=0.2,  # Lower threshold to increase detections
             overlay_font_scale=2.5,  # Font scale for overlay
             overlay_show_probabilities=True  # Show confidence scores
         )
         
+        # Print model properties to help with debugging
         print("Model loaded successfully")
+        print(f"Model properties: {dir(model)}")
+        if hasattr(model, 'info'):
+            print(f"Model info: {model.info}")
+        
         return model
         
     except Exception as e:
@@ -381,12 +397,57 @@ signal.signal(signal.SIGINT, signal_handler)
 def save_frame(frame, filename="latest_frame.jpg"):
     """Save a frame to disk for debugging"""
     try:
-        cv2.imwrite(filename, frame)
-        print(f"Saved frame to {filename}")
-        return True
+        # Make sure the image is BGR for OpenCV
+        if isinstance(frame, np.ndarray):
+            # Create a copy to avoid modifying the original
+            save_img = frame.copy()
+            cv2.imwrite(filename, save_img)
+            print(f"Saved frame to {filename}")
+            return True
+        else:
+            print(f"Error: frame is not a valid image: {type(frame)}")
+            return False
     except Exception as e:
         print(f"Error saving frame: {e}")
+        import traceback
+        traceback.print_exc()
         return False
+
+def draw_detection_on_frame(frame, detection):
+    """Draw a single detection on the frame with proper formatting"""
+    x1, y1, x2, y2, score, class_id = detection
+    
+    # Get cat name and color
+    cat_name = CAT_CLASSES.get(class_id, f"Unknown-{class_id}")
+    color = COLORS.get(cat_name.lower(), COLORS['unknown'])
+    
+    # Ensure coordinates are valid
+    height, width = frame.shape[:2]
+    x1 = max(0, min(x1, width-1))
+    y1 = max(0, min(y1, height-1))
+    x2 = max(0, min(x2, width-1))
+    y2 = max(0, min(y2, height-1))
+    
+    # Draw thick bounding box
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+    
+    # Add filled background for text
+    label_text = f"{cat_name}: {score:.2f}"
+    text_size, _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    text_w, text_h = text_size
+    
+    # Draw filled rectangle for text background
+    cv2.rectangle(frame, 
+                 (x1, y1 - text_h - 10), 
+                 (x1 + text_w + 10, y1), 
+                 color, -1)  # -1 means filled
+    
+    # Draw text with contrasting color
+    cv2.putText(frame, label_text, 
+               (x1 + 5, y1 - 5), 
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLORS['white'], 2)
+    
+    return frame
 
 try:
     # Load AI model with proper error handling
@@ -409,9 +470,14 @@ try:
     frame_count = 0
     fps = 0
     last_frame_save = 0
+    last_inference_time = 0
+    
+    print("Starting main loop - press Ctrl+C to exit")
     
     while True:
         try:
+            current_time = time.time()
+            
             # Get frame from camera
             frame = get_frame(camera)
             frame_width = frame.shape[1]
@@ -419,81 +485,88 @@ try:
             # Create display frame for saving (without display)
             display_frame = frame.copy()
             
-            # Perform inference
-            if DEV_MODE:
-                results = model(frame, conf=CONFIDENCE_THRESHOLD)
-            else:
-                # Use Degirum's predict_batch method which returns a generator
-                print("Running inference with Degirum model...")
-                
-                # Set a timeout for inference
-                inference_start = time.time()
-                inference_timeout = 5.0  # 5 seconds timeout
-                results = None
-                
-                try:
-                    prediction_generator = model.predict_batch([frame])
-                    # Get the first result from the generator
-                    for result in prediction_generator:
-                        results = result
-                        print(f"Got result type: {type(results)}")
-                        if hasattr(results, 'results'):
-                            print(f"Results contain {len(results.results)} items")
-                        break  # Only process the first result
+            # Only run inference at specified intervals
+            run_inference = (current_time - last_inference_time) >= INFERENCE_INTERVAL
+            
+            if run_inference:
+                # Perform inference
+                if DEV_MODE:
+                    results = model(frame, conf=CONFIDENCE_THRESHOLD)
+                else:
+                    # Use Degirum's predict_batch method which returns a generator
+                    print(f"\nRunning inference at t={current_time:.1f}s")
                     
-                    if results is None:
-                        print("No results from model, creating empty results")
-                        # Create a dummy result if none was returned
+                    # Set a timeout for inference
+                    inference_start = time.time()
+                    inference_timeout = 5.0  # 5 seconds timeout
+                    results = None
+                    
+                    try:
+                        prediction_generator = model.predict_batch([frame])
+                        # Get the first result from the generator
+                        for result in prediction_generator:
+                            results = result
+                            print(f"Got result type: {type(results)}")
+                            if hasattr(results, 'results'):
+                                print(f"Results contain {len(results.results)} items")
+                            break  # Only process the first result
+                        
+                        if results is None:
+                            print("No results from model, creating empty results")
+                            # Create a dummy result if none was returned
+                            class DummyResult:
+                                def __init__(self):
+                                    self.results = []
+                            results = DummyResult()
+                            
+                    except Exception as e:
+                        print(f"ERROR in inference: {e}")
+                        # Create a dummy result on error
                         class DummyResult:
                             def __init__(self):
                                 self.results = []
                         results = DummyResult()
+                
+                # Process detections
+                detections = process_detections(frame, results)
+                
+                # Update last inference time
+                last_inference_time = current_time
+                
+                # Handle and visualize detections
+                if len(detections) > 0:
+                    print(f"Detected {len(detections)} objects")
+                    
+                    # Save detection frame
+                    detection_filename = f"detection_{int(current_time)}.jpg"
+                    
+                    # Create a copy for drawing
+                    annotated_frame = display_frame.copy()
+                    
+                    # Draw bounding boxes on the frame
+                    for detection in detections:
+                        x1, y1, x2, y2, score, class_id = detection
                         
-                except Exception as e:
-                    print(f"ERROR in inference: {e}")
-                    # Create a dummy result on error
-                    class DummyResult:
-                        def __init__(self):
-                            self.results = []
-                    results = DummyResult()
-            
-            # Process detections
-            detections = process_detections(frame, results)
+                        # Get cat name and color
+                        cat_name = CAT_CLASSES.get(class_id, "Unknown")
+                        
+                        # Print detection details
+                        print(f"- {cat_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
+                        
+                        # Draw detection on the frame copy
+                        annotated_frame = draw_detection_on_frame(annotated_frame, detection)
+                        
+                        # Handle detection and relay control
+                        handle_detection([x1, y1, x2, y2], frame_width)
+                    
+                    # Save the annotated frame
+                    save_frame(annotated_frame, detection_filename)
+                    print(f"Saved annotated detection image to {detection_filename}")
             
             # Save frame periodically (every 5 seconds)
-            current_time = time.time()
             if current_time - last_frame_save > 5:
                 save_frame(frame, f"frame_{int(current_time)}.jpg")
                 last_frame_save = current_time
-            
-            if len(detections) > 0:
-                print(f"Detected {len(detections)} objects")
-                
-                # Save detection frame
-                detection_filename = f"detection_{int(current_time)}.jpg"
-                
-                # Draw bounding boxes on the frame
-                for x1, y1, x2, y2, score, class_id in detections:
-                    # Get cat name and color
-                    cat_name = CAT_CLASSES.get(class_id, "Unknown")
-                    color = COLORS.get(cat_name.lower(), COLORS['unknown'])
-                    
-                    # Print detection details
-                    print(f"- {cat_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
-                    
-                    # Draw bounding box on saved frame
-                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-                    
-                    # Add label to saved frame
-                    label_text = f"{cat_name}: {score:.2f}"
-                    cv2.putText(display_frame, label_text, (x1, y1 - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLORS['white'], 2)
-                    
-                    # Handle detection and relay control
-                    handle_detection([x1, y1, x2, y2], frame_width)
-                
-                # Save the annotated frame
-                save_frame(display_frame, detection_filename)
             
             # Calculate and display FPS
             frame_count += 1
