@@ -390,12 +390,28 @@ def load_model():
         print("Loading Degirum model for Hailo accelerator...")
         import degirum as dg
         
+        # Check if model zoo path exists
+        if not os.path.exists(zoo_url):
+            print(f"ERROR: Model zoo path not found: {zoo_url}")
+            print("Please check that the path is correct and the directory exists.")
+            return None
+            
+        print(f"Model zoo path verified: {zoo_url}")
+        print(f"Attempting to load model: {model_name}")
+        
+        # List available models if possible
+        try:
+            available_models = os.listdir(zoo_url)
+            print(f"Available files in model zoo directory: {available_models}")
+        except Exception as e:
+            print(f"Warning: Could not list contents of model zoo directory: {e}")
+        
         # Load the model with local inference - use very low confidence threshold
         # to make sure we're detecting everything possible
         model = dg.load_model(
-            model_name="yolov8n_cats",
-            inference_host_address="@local",  # Use @local for local inference
-            zoo_url="/home/pi5/degirum_model_zoo",  # Path to your model zoo
+            model_name=model_name,
+            inference_host_address=inference_host_address,  # Use @local for local inference
+            zoo_url=zoo_url,  # Path to your model zoo
             output_confidence_threshold=0.1,  # Very low threshold to catch all possible detections
             overlay_font_scale=2.5,  # Font scale for overlay
             overlay_show_probabilities=True,  # Show confidence scores
@@ -421,6 +437,47 @@ def load_model():
         print("Detailed error traceback:")
         import traceback
         traceback.print_exc()
+        print("\nCommon model loading issues:")
+        print("1. Model zoo path incorrect or missing")
+        print("2. Model file not found in the model zoo directory")
+        print("3. DeGirum package not installed correctly")
+        print("4. Hailo accelerator not connected or detected")
+        return None
+
+def load_fallback_model():
+    """Try to load a generic model just to test if DeGirum is working"""
+    try:
+        print("Attempting to load a fallback model...")
+        import degirum as dg
+        
+        # Try to load a generic model
+        generic_models = [
+            "yolov8n", 
+            "yolov8n_coco", 
+            "yolov5n_coco",
+            "yolov7_tiny_coco",
+            "mobilenet_v2_ssd_coco"
+        ]
+        
+        for generic_model in generic_models:
+            try:
+                print(f"Trying to load generic model: {generic_model}")
+                model = dg.load_model(
+                    model_name=generic_model,
+                    inference_host_address=inference_host_address,
+                    zoo_url="degirum/public",  # Use public model zoo
+                    output_confidence_threshold=0.1
+                )
+                print(f"Successfully loaded fallback model: {generic_model}")
+                return model
+            except Exception as e:
+                print(f"Failed to load {generic_model}: {e}")
+                continue
+        
+        print("Could not load any fallback models")
+        return None
+    except Exception as e:
+        print(f"Error in load_fallback_model: {e}")
         return None
 
 def signal_handler(sig, frame):
@@ -581,9 +638,75 @@ def test_detection_on_sample_image():
     
     return False  # No sample image found
 
+def test_degirum_setup():
+    """Test if DeGirum and Hailo are correctly set up"""
+    try:
+        import degirum as dg
+        print("DeGirum package is installed.")
+        
+        # Try to get DeGirum version
+        if hasattr(dg, '__version__'):
+            print(f"DeGirum version: {dg.__version__}")
+        
+        # Test if Hailo runtime is available
+        try:
+            # List available devices if possible
+            if hasattr(dg, 'list_devices'):
+                devices = dg.list_devices()
+                print(f"Available devices: {devices}")
+            else:
+                print("DeGirum does not have list_devices method.")
+                
+            # Alternative way to check for Hailo
+            import subprocess
+            try:
+                result = subprocess.run(['hailortcli', 'device', 'show'], 
+                                        capture_output=True, text=True, timeout=5)
+                print("Hailo device information:")
+                print(result.stdout)
+                if result.returncode != 0:
+                    print(f"Warning: hailortcli returned non-zero exit code: {result.returncode}")
+                    print(f"Error output: {result.stderr}")
+            except Exception as e:
+                print(f"Could not run hailortcli: {e}")
+            
+            return True
+        except Exception as e:
+            print(f"Error checking Hailo runtime: {e}")
+            return False
+            
+    except ImportError:
+        print("ERROR: DeGirum package is not installed or cannot be imported.")
+        print("Please install DeGirum package using:")
+        print("pip install degirum")
+        return False
+    except Exception as e:
+        print(f"Error testing DeGirum setup: {e}")
+        return False
+
 try:
+    # First, test if DeGirum and Hailo are properly set up
+    print("\n=== Testing DeGirum and Hailo Setup ===")
+    degirum_available = test_degirum_setup()
+    if not degirum_available:
+        print("ERROR: DeGirum or Hailo setup issues detected.")
+        print("Please fix the issues above before running the script.")
+        sys.exit(1)
+    print("=== DeGirum and Hailo Setup Test Completed ===\n")
+    
     # Load AI model with proper error handling
     model = load_model()
+    
+    if model is None:
+        print("Primary model loading failed. Trying fallback model...")
+        model = load_fallback_model()
+        
+    if model is None:
+        print("ERROR: Failed to load any model. Check the error messages above for details.")
+        print("Check that the DeGirum package is installed correctly and Hailo accelerator is connected.")
+        print("Exiting program.")
+        sys.exit(1)
+        
     setup_sound()
     
     # Test with a sample image if available
