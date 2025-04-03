@@ -9,9 +9,11 @@ source "$DIR/cat_venv/bin/activate"
 # Get the full path to the Python interpreter in the virtual environment
 PYTHON_PATH=$(which python3)
 
-# Add system Python packages to PYTHONPATH
-SYSTEM_PYTHON_PATH="/usr/lib/python3.11:/usr/lib/python3/dist-packages"
-export PYTHONPATH="$SYSTEM_PYTHON_PATH:$PYTHONPATH"
+# Get the virtual environment's site-packages directory
+VENV_SITE_PACKAGES="$DIR/cat_venv/lib/python3.11/site-packages"
+
+# Add virtual environment packages first, then system packages
+export PYTHONPATH="$VENV_SITE_PACKAGES:/usr/lib/python3.11:/usr/lib/python3/dist-packages"
 
 # Run the script with sudo, preserving the virtual environment
 sudo -E env "PATH=$PATH" "PYTHONPATH=$PYTHONPATH" "$PYTHON_PATH" "$DIR/main.py" 
