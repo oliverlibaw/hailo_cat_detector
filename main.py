@@ -42,6 +42,9 @@ RELAY_PINS = {
     'unused': 15    # Unused relay
 }
 
+# Important: Set to True if your relay module activates on LOW rather than HIGH
+RELAY_ACTIVE_LOW = True    # Many relay HATs activate on LOW signal
+
 # Model Setup
 inference_host_address = "@local"
 zoo_url = "/home/pi5/degirum_model_zoo"
@@ -62,7 +65,8 @@ FPS = 15  # Target FPS
 DEBUG_MODE = True  # Enable for debugging relay issues
 VERBOSE_OUTPUT = False  # Reduce console output
 SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
-SAVE_INTERVAL = 10  # Only save every 10th frame with detections to improve performance
+SAVE_INTERVAL = 30  # Only save every 30th frame with detections to improve performance
+MAX_SAVED_FRAMES = 20  # Maximum number of frames to keep before overwriting old ones
 
 # Cat class names
 CAT_CLASSES = {
@@ -781,6 +785,41 @@ class FPSCounter:
             
         return self.fps
 
+def cleanup_old_frames():
+    """Clean up old saved frames to prevent filling the disk"""
+    try:
+        # Get all jpg files in the current directory
+        jpg_files = [f for f in os.listdir('.') if f.startswith('detection_') and f.endswith('.jpg')]
+        
+        # Sort by modification time (newest first)
+        jpg_files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+        
+        # If we have more than MAX_SAVED_FRAMES, remove the oldest ones
+        if len(jpg_files) > MAX_SAVED_FRAMES:
+            files_to_remove = jpg_files[MAX_SAVED_FRAMES:]
+            for old_file in files_to_remove:
+                try:
+                    os.remove(old_file)
+                    if DEBUG_MODE:
+                        print(f"Removed old frame: {old_file}")
+                except Exception as e:
+                    print(f"Error removing old frame {old_file}: {e}")
+                    
+        # Also clean up old FPS report images
+        fps_files = [f for f in os.listdir('.') if f.startswith('fps_report_') and f.endswith('.jpg')]
+        fps_files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+        
+        # Keep only the 5 most recent FPS reports
+        if len(fps_files) > 5:
+            for old_file in fps_files[5:]:
+                try:
+                    os.remove(old_file)
+                except Exception:
+                    pass
+    except Exception as e:
+        if DEBUG_MODE:
+            print(f"Error cleaning up old frames: {e}")
+
 def process_actions(frame, detections, fps):
     """Process detections and take appropriate actions"""
     frame_width = frame.shape[1]
@@ -807,15 +846,19 @@ def process_actions(frame, detections, fps):
     cv2.putText(annotated_frame, fps_text, (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
     
+    # Frame counter for limiting saved images
+    frame_counter = int(time.time()) % SAVE_INTERVAL
+    
+    # Clean up old frames periodically
+    if frame_counter == 0:
+        cleanup_old_frames()
+    
     # Process detections if we have any
     if len(detections) > 0:
         if VERBOSE_OUTPUT:
             print(f"Detected {len(detections)} objects")
         
-        # Frame counter for limiting saved images
-        frame_counter = int(time.time()) % SAVE_INTERVAL
-        
-        # Only save frames periodically to improve performance
+        # Save detection frame periodically
         if frame_counter == 0:
             detection_filename = f"detection_{int(time.time())}.jpg"
         
@@ -905,8 +948,8 @@ def process_actions(frame, detections, fps):
         pos_text = f"Position: {relative_position:.2f}"
         cv2.putText(annotated_frame, pos_text, (10, height - 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Only save frames periodically to improve performance
+                    
+        # Save frame if it's time
         if frame_counter == 0:
             # Save the annotated frame
             cv2.imwrite(detection_filename, annotated_frame)
@@ -1052,21 +1095,38 @@ def init_gpio():
     try:
         import RPi.GPIO as GPIO
         GPIO.setmode(GPIO.BCM)
+        
+        # Setup all relay pins as OUTPUT
         GPIO.setup(RELAY_PIN_LEFT, GPIO.OUT)
         GPIO.setup(RELAY_PIN_RIGHT, GPIO.OUT)
-        GPIO.setup(RELAY_PINS['center'], GPIO.OUT)  # Setup center relay
+        GPIO.setup(RELAY_PINS['center'], GPIO.OUT)
+        GPIO.setup(RELAY_PINS['unused'], GPIO.OUT)  # Setup unused relay too
         
-        # Initialize all relays to off
-        GPIO.output(RELAY_PIN_LEFT, GPIO.LOW)
-        GPIO.output(RELAY_PIN_RIGHT, GPIO.LOW)
-        GPIO.output(RELAY_PINS['center'], GPIO.LOW)
+        # Initialize all relays to OFF state
+        # For active LOW relays, OFF = HIGH; for active HIGH relays, OFF = LOW
+        initial_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
         
-        print(f"GPIO initialized: center relay on pin {RELAY_PINS['center']}, left relay on pin {RELAY_PIN_LEFT}, right relay on pin {RELAY_PIN_RIGHT}")
+        GPIO.output(RELAY_PIN_LEFT, initial_state)
+        GPIO.output(RELAY_PIN_RIGHT, initial_state)
+        GPIO.output(RELAY_PINS['center'], initial_state)
+        GPIO.output(RELAY_PINS['unused'], initial_state)
+        
+        # Initialize relay state cache
+        global relay_state_cache
+        relay_state_cache = {
+            RELAY_PINS['center']: False,
+            RELAY_PINS['left']: False,
+            RELAY_PINS['right']: False,
+            RELAY_PINS['unused']: False
+        }
+        
+        print(f"GPIO initialized with relay pins: center={RELAY_PINS['center']}, left={RELAY_PIN_LEFT}, right={RELAY_PIN_RIGHT}")
+        print(f"Relays are {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'}")
     except ImportError:
         print("WARNING: RPi.GPIO module not available, GPIO control disabled")
     except Exception as e:
         print(f"Error initializing GPIO: {e}")
-        
+
 def set_relay(pin, state):
     """Set relay state (True = ON, False = OFF) with state caching and hysteresis"""
     global relay_state_cache, last_relay_change_time
@@ -1088,14 +1148,19 @@ def set_relay(pin, state):
     
     try:
         import RPi.GPIO as GPIO
-        GPIO.output(pin, GPIO.HIGH if state else GPIO.LOW)
+        
+        # Invert the signal if relays are active LOW
+        gpio_state = GPIO.LOW if (state and RELAY_ACTIVE_LOW) or (not state and not RELAY_ACTIVE_LOW) else GPIO.HIGH
+        
+        # Set the GPIO pin state
+        GPIO.output(pin, gpio_state)
         
         # Update state cache and timestamp
         relay_state_cache[pin] = state
         last_relay_change_time[pin] = current_time
         
         if DEBUG_MODE:
-            print(f"Relay {pin} set to {'ON' if state else 'OFF'}")
+            print(f"Relay {pin} set to {'ON' if state else 'OFF'} (GPIO {'LOW' if gpio_state == GPIO.LOW else 'HIGH'})")
         return True
     except (ImportError, NameError):
         # If we can't import GPIO, just print what we would do
@@ -1114,22 +1179,36 @@ def cleanup():
     """Clean up resources before exiting"""
     print("Cleaning up resources...")
     
-    # Clean up GPIO
+    # Ensure all relays are turned OFF before cleanup
     try:
         if not DEV_MODE:
+            print("Turning off all relays...")
+            for name, pin in RELAY_PINS.items():
+                try:
+                    set_relay(pin, False)
+                    print(f"Relay {name} (pin {pin}) turned off")
+                except Exception as e:
+                    print(f"Error turning off {name} relay: {e}")
+            
+            # Now clean up GPIO
             import RPi.GPIO as GPIO
             GPIO.cleanup()
             print("GPIO pins cleaned up")
-    except:
-        pass
+    except Exception as e:
+        print(f"Error during GPIO cleanup: {e}")
     
     # Release camera if it exists
     try:
         if 'camera' in globals() and camera is not None:
-            camera.release()
+            if DEV_MODE:
+                camera.release()
+            else:
+                camera.stop()
             print("Camera released")
-    except:
-        pass
+    except Exception as e:
+        print(f"Error releasing camera: {e}")
+        
+    print("Cleanup completed")
 
 def print_config():
     """Print current configuration settings"""
@@ -1171,6 +1250,41 @@ def print_header():
         print(f"Running on platform: {sys.platform}")
     print("")
 
+def test_relays():
+    """Test all relays in sequence to verify they're working"""
+    if DEV_MODE:
+        print("Skipping relay test in development mode")
+        return
+        
+    try:
+        print("Testing all relays in sequence...")
+        
+        # Test all relays one by one
+        for name, pin in RELAY_PINS.items():
+            print(f"Testing {name} relay (pin {pin})...")
+            
+            # Turn on
+            set_relay(pin, True)
+            time.sleep(0.5)
+            
+            # Turn off
+            set_relay(pin, False)
+            time.sleep(0.5)
+        
+        # Test all relays at once
+        print("Testing all relays together...")
+        for name, pin in RELAY_PINS.items():
+            set_relay(pin, True)
+        
+        time.sleep(1.0)
+        
+        for name, pin in RELAY_PINS.items():
+            set_relay(pin, False)
+            
+        print("Relay test completed")
+    except Exception as e:
+        print(f"Error testing relays: {e}")
+
 def main():
     """Main function"""
     try:
@@ -1196,13 +1310,15 @@ def main():
         # Configure camera
         camera = setup_camera()
         
-        # Test model on a sample image if it exists
-        if os.path.exists("sample_cat.jpg") and not DEV_MODE:
-            test_model_on_sample(model)
-        
         # Initialize GPIO if not in dev mode
         if not DEV_MODE:
             init_gpio()
+            # Test all relays
+            test_relays()
+        
+        # Test model on a sample image if it exists
+        if os.path.exists("sample_cat.jpg") and not DEV_MODE:
+            test_model_on_sample(model)
         
         # Print configuration
         print_config()
