@@ -45,6 +45,9 @@ RELAY_PINS = {
 # Important: Set to True if your relay module activates on LOW rather than HIGH
 RELAY_ACTIVE_LOW = True    # Many relay HATs activate on LOW signal
 
+# This flag indicates relays are "normally closed" - they're ON when not activated
+RELAY_NORMALLY_CLOSED = True  # Set to True if relays are ON by default and turn OFF when activated
+
 # Model Setup
 inference_host_address = "@local"
 zoo_url = "/home/pi5/degirum_model_zoo"
@@ -1102,34 +1105,35 @@ def init_gpio():
         GPIO.setup(RELAY_PINS['center'], GPIO.OUT)
         GPIO.setup(RELAY_PINS['unused'], GPIO.OUT)  # Setup unused relay too
         
+        # For normally closed relays with active LOW:
+        # - To turn relay OFF (close circuit): Set GPIO HIGH (deactivate relay)
+        # - To turn relay ON (open circuit): Set GPIO LOW (activate relay)
+        initial_state = False  # We always want relays to start in the OFF state
+        
         # Initialize all relays to OFF state
-        # For active LOW relays, OFF = HIGH; for active HIGH relays, OFF = LOW
-        initial_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
-        
-        GPIO.output(RELAY_PIN_LEFT, initial_state)
-        GPIO.output(RELAY_PIN_RIGHT, initial_state)
-        GPIO.output(RELAY_PINS['center'], initial_state)
-        GPIO.output(RELAY_PINS['unused'], initial_state)
-        
-        # Initialize relay state cache
-        global relay_state_cache
-        relay_state_cache = {
-            RELAY_PINS['center']: False,
-            RELAY_PINS['left']: False,
-            RELAY_PINS['right']: False,
-            RELAY_PINS['unused']: False
-        }
+        print("Setting all relays to OFF state...")
+        for name, pin in RELAY_PINS.items():
+            set_relay(pin, initial_state)
         
         print(f"GPIO initialized with relay pins: center={RELAY_PINS['center']}, left={RELAY_PIN_LEFT}, right={RELAY_PIN_RIGHT}")
-        print(f"Relays are {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'}")
+        print(f"Relays are {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'} and {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
     except ImportError:
         print("WARNING: RPi.GPIO module not available, GPIO control disabled")
     except Exception as e:
         print(f"Error initializing GPIO: {e}")
 
 def set_relay(pin, state):
-    """Set relay state (True = ON, False = OFF) with state caching and hysteresis"""
+    """
+    Set relay state (True = ON, False = OFF) with state caching and hysteresis
+    
+    For normally closed relays:
+    - When state=True (ON), we want to DEACTIVATE the relay (to open the circuit)
+    - When state=False (OFF), we want to ACTIVATE the relay (to close the circuit)
+    """
     global relay_state_cache, last_relay_change_time
+    
+    # If relays are normally closed, invert the state
+    actual_state = not state if RELAY_NORMALLY_CLOSED else state
     
     # Get current time for hysteresis check
     current_time = time.time()
@@ -1150,7 +1154,7 @@ def set_relay(pin, state):
         import RPi.GPIO as GPIO
         
         # Invert the signal if relays are active LOW
-        gpio_state = GPIO.LOW if (state and RELAY_ACTIVE_LOW) or (not state and not RELAY_ACTIVE_LOW) else GPIO.HIGH
+        gpio_state = GPIO.LOW if (actual_state and RELAY_ACTIVE_LOW) or (not actual_state and not RELAY_ACTIVE_LOW) else GPIO.HIGH
         
         # Set the GPIO pin state
         GPIO.output(pin, gpio_state)
@@ -1161,6 +1165,8 @@ def set_relay(pin, state):
         
         if DEBUG_MODE:
             print(f"Relay {pin} set to {'ON' if state else 'OFF'} (GPIO {'LOW' if gpio_state == GPIO.LOW else 'HIGH'})")
+            if RELAY_NORMALLY_CLOSED:
+                print(f"  Relay physically {'OPEN' if state else 'CLOSED'}")
         return True
     except (ImportError, NameError):
         # If we can't import GPIO, just print what we would do
@@ -1257,33 +1263,50 @@ def test_relays():
         return
         
     try:
+        print("\n==== RELAY TEST ====")
+        print(f"Relay configuration: {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'}, {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
         print("Testing all relays in sequence...")
         
-        # Test all relays one by one
+        # First turn all relays OFF to establish baseline
+        print("Setting all relays to OFF state...")
         for name, pin in RELAY_PINS.items():
-            print(f"Testing {name} relay (pin {pin})...")
+            set_relay(pin, False)
+        time.sleep(1.0)
+        
+        # Then test each relay individually
+        for name, pin in RELAY_PINS.items():
+            print(f"\nTesting {name} relay (pin {pin})...")
             
-            # Turn on
+            # Turn ON
+            print(f"  Setting {name} relay to ON")
             set_relay(pin, True)
-            time.sleep(0.5)
+            time.sleep(1.0)
             
-            # Turn off
+            # Turn OFF
+            print(f"  Setting {name} relay to OFF")
             set_relay(pin, False)
             time.sleep(0.5)
         
         # Test all relays at once
-        print("Testing all relays together...")
+        print("\nTesting all relays together...")
+        # Turn ON all relays
+        print("  Setting ALL relays to ON")
         for name, pin in RELAY_PINS.items():
             set_relay(pin, True)
         
-        time.sleep(1.0)
+        time.sleep(1.5)
         
+        # Turn OFF all relays
+        print("  Setting ALL relays to OFF")
         for name, pin in RELAY_PINS.items():
             set_relay(pin, False)
             
-        print("Relay test completed")
+        print("\nRelay test completed")
+        print("====================\n")
     except Exception as e:
         print(f"Error testing relays: {e}")
+        import traceback
+        traceback.print_exc()
 
 def main():
     """Main function"""
