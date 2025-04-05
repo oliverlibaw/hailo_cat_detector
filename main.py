@@ -36,8 +36,8 @@ if not DEV_MODE:
 
 # GPIO Pin Setup
 RELAY_PINS = {
-    'center': 5,    # Center relay (triggers on any detection)
-    'left': 6,      # Left relay (triggers for left-side detections)
+    'center': 6,    # Center relay (triggers on any detection)
+    'left': 5,      # Left relay (triggers for left-side detections)
     'right': 13,    # Right relay (triggers for right-side detections)
     'unused': 15    # Unused relay
 }
@@ -52,10 +52,10 @@ RELAY_NORMALLY_CLOSED = True  # Set to True if relays are ON by default and turn
 inference_host_address = "@local"
 zoo_url = "/home/pi5/degirum_model_zoo"
 token = ""
-model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # YOLOv11n model
+model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # YOLO11s model - larger and more accurate
 
 # Configuration
-DETECTION_THRESHOLD = 0.40  # Confidence threshold for detections
+DETECTION_THRESHOLD = 0.30  # Confidence threshold for detections (lowered from 0.40 for better recall)
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv11 input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
 RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
@@ -279,69 +279,91 @@ def process_detections(frame, results):
     else:
         # Process Degirum results
         try:
-            # Check if there are results in the standard results list
+            # YOLO11s model sometimes returns results directly in 'results' and sometimes in 'results.results'
             if hasattr(results, 'results') and results.results:
+                result_list = results.results
                 if VERBOSE_OUTPUT:
-                    print(f"Processing {len(results.results)} detections")
-                
-                # Process each detection
-                for detection in results.results:
-                    try:
-                        # Method 1: Direct access if detection is a dictionary
-                        if isinstance(detection, dict):
-                            if 'bbox' in detection:
-                                bbox = detection['bbox']
+                    print(f"Processing {len(result_list)} detections from results.results")
+            elif hasattr(results, 'results') and isinstance(results.results, list):
+                result_list = results.results
+                if VERBOSE_OUTPUT:
+                    print(f"Processing {len(result_list)} detections from results.results list")
+            elif isinstance(results, list):
+                result_list = results
+                if VERBOSE_OUTPUT:
+                    print(f"Processing {len(result_list)} detections from direct results list")
+            else:
+                # No clear list of results found
+                result_list = []
+                if hasattr(results, '__dict__'):
+                    if VERBOSE_OUTPUT:
+                        print(f"Results attributes: {list(results.__dict__.keys())}")
+            
+            # Process detections from the result list
+            for detection in result_list:
+                try:
+                    # Try multiple approaches to extract bounding box information
+                    x1, y1, x2, y2, score, class_id = None, None, None, None, None, None
+                    
+                    # Method 1: Direct dictionary access
+                    if isinstance(detection, dict):
+                        if 'bbox' in detection:
+                            bbox = detection['bbox']
+                            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
                                 x1, y1, x2, y2 = map(int, bbox)
-                                score = float(detection.get('score', 0.0))
-                                
-                                # Get the class ID depending on which model we're using
-                                if USE_COCO_MODEL:
-                                    class_id = int(detection.get('category_id', 0))
-                                    # Only process cat class (15) or other specified classes
-                                    if class_id not in CLASSES_TO_DETECT:
-                                        continue
-                                else:
-                                    class_id = int(detection.get('category_id', 0))
-                                
-                                if VERBOSE_OUTPUT:
-                                    print(f"Detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}")
-                                
-                                # Only add if score exceeds threshold
-                                if score >= DETECTION_THRESHOLD:
-                                    detections.append((x1, y1, x2, y2, score, class_id))
-                                continue
+                            
+                            score = float(detection.get('score', detection.get('confidence', 0.0)))
+                            
+                            # Get class ID depending on the model format
+                            class_id = int(detection.get('category_id', detection.get('class_id', 0)))
+                    
+                    # Method 2: Object attribute access
+                    elif hasattr(detection, 'bbox'):
+                        bbox = detection.bbox
                         
-                        # Method 2: Access attributes if they exist
-                        if hasattr(detection, 'bbox'):
-                            # If bbox is an object
-                            if hasattr(detection.bbox, 'x1'):
-                                x1 = int(detection.bbox.x1)
-                                y1 = int(detection.bbox.y1)
-                                x2 = int(detection.bbox.x2)
-                                y2 = int(detection.bbox.y2)
-                            # If bbox is a list/tuple/array
-                            elif hasattr(detection.bbox, '__getitem__'):
-                                x1 = int(detection.bbox[0])
-                                y1 = int(detection.bbox[1])
-                                x2 = int(detection.bbox[2])
-                                y2 = int(detection.bbox[3])
-                            else:
-                                continue
-                                
-                            # Get score and class ID
-                            score = float(getattr(detection, 'score', getattr(detection, 'confidence', 0.0)))
-                            class_id = int(getattr(detection, 'class_id', getattr(detection, 'category_id', 0)))
-                                
-                            # For COCO model, only process specified classes
-                            if USE_COCO_MODEL and class_id not in CLASSES_TO_DETECT:
-                                continue
-                                
-                            # Only add if score exceeds threshold
-                            if score >= DETECTION_THRESHOLD:
-                                detections.append((x1, y1, x2, y2, score, class_id))
-                    except Exception as e:
-                        if VERBOSE_OUTPUT:
-                            print(f"Error processing detection: {e}")
+                        # Handle different bbox formats
+                        if hasattr(bbox, 'x1') and hasattr(bbox, 'y1') and hasattr(bbox, 'x2') and hasattr(bbox, 'y2'):
+                            x1, y1, x2, y2 = int(bbox.x1), int(bbox.y1), int(bbox.x2), int(bbox.y2)
+                        elif hasattr(bbox, '__getitem__') and len(bbox) == 4:
+                            x1, y1, x2, y2 = map(int, bbox)
+                        
+                        # Get score and class ID
+                        if hasattr(detection, 'score'):
+                            score = float(detection.score)
+                        elif hasattr(detection, 'confidence'):
+                            score = float(detection.confidence)
+                        
+                        if hasattr(detection, 'class_id'):
+                            class_id = int(detection.class_id)
+                        elif hasattr(detection, 'category_id'):
+                            class_id = int(detection.category_id)
+                    
+                    # Skip invalid or incomplete detections
+                    if None in (x1, y1, x2, y2, score, class_id):
+                        continue
+                    
+                    # For COCO model, filter for cat class only
+                    if USE_COCO_MODEL and class_id not in CLASSES_TO_DETECT:
+                        continue
+                    
+                    # Add detection if it meets threshold
+                    if score >= DETECTION_THRESHOLD:
+                        # Make sure coordinates are within image bounds
+                        height, width = frame.shape[:2]
+                        x1 = max(0, min(width-1, x1))
+                        y1 = max(0, min(height-1, y1))
+                        x2 = max(0, min(width-1, x2))
+                        y2 = max(0, min(height-1, y2))
+                        
+                        # Only add if the box has reasonable size
+                        if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
+                            detections.append((x1, y1, x2, y2, score, class_id))
+                            if VERBOSE_OUTPUT:
+                                print(f"Added detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}, class={class_id}")
+                
+                except Exception as e:
+                    if DEBUG_MODE:
+                        print(f"Error processing detection: {e}")
             
             # If we have no detections but have a model overlay image, store it for reference
             if len(detections) == 0 and hasattr(results, 'image_overlay') and results.image_overlay is not None:
@@ -353,8 +375,10 @@ def process_detections(frame, results):
                     print("No detections found above threshold")
         
         except Exception as e:
-            if VERBOSE_OUTPUT:
+            if DEBUG_MODE:
                 print(f"Error processing detection results: {e}")
+                import traceback
+                traceback.print_exc()
     
     if VERBOSE_OUTPUT:
         print(f"Returning {len(detections)} processed detections")
@@ -432,9 +456,9 @@ def draw_overlay(frame, relative_position=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLORS['red'], 2)
 
 def load_model():
-    """Load the YOLOv11 model for detection."""
+    """Load the YOLO11s model for detection."""
     try:
-        print(f"Loading YOLOv11 model: {model_name}")
+        print(f"Loading YOLO11s model: {model_name}")
         model_to_load = model_name
         zoo_path = zoo_url
         
@@ -464,7 +488,7 @@ def load_model():
             except Exception as e:
                 print(f"Warning: Could not list contents of model zoo directory: {e}")
         
-        # Load the model with local inference
+        # Load the model with optimized parameters
         model = dg.load_model(
             model_name=model_to_load,
             inference_host_address=inference_host_address,
@@ -472,7 +496,10 @@ def load_model():
             output_confidence_threshold=DETECTION_THRESHOLD,
             overlay_line_width=3,  # Thicker lines for better visibility
             overlay_font_scale=2.0,  # Font scale for overlay
-            overlay_show_probabilities=True  # Show confidence scores
+            overlay_show_probabilities=True,  # Show confidence scores
+            output_format="NHWC",  # Use NHWC format for better compatibility
+            output_class_activation_threshold=DETECTION_THRESHOLD,  # Make sure class activation threshold matches confidence
+            batch_size=1  # Set batch size to 1 for consistent performance
         )
         
         print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
@@ -848,6 +875,15 @@ def process_actions(frame, detections, fps):
     cv2.rectangle(annotated_frame, (0, 0), (200, 40), (0, 0, 0), -1)
     cv2.putText(annotated_frame, fps_text, (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+    
+    # Add model info
+    model_text = f"Model: YOLO11s"
+    threshold_text = f"Threshold: {DETECTION_THRESHOLD:.2f}"
+    cv2.rectangle(annotated_frame, (width - 250, 0), (width, 70), (0, 0, 0), -1)
+    cv2.putText(annotated_frame, model_text, (width - 240, 25), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    cv2.putText(annotated_frame, threshold_text, (width - 240, 55), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     
     # Frame counter for limiting saved images
     frame_counter = int(time.time()) % SAVE_INTERVAL
