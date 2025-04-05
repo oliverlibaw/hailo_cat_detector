@@ -364,6 +364,8 @@ def process_video(input_path, output_path):
 
 def main():
     """Main function"""
+    global DETECTION_THRESHOLD  # Move global declaration to beginning of function
+    
     parser = argparse.ArgumentParser(description="Process a video file to detect cats.")
     parser.add_argument("--input", "-i", type=str, default="/home/pi5/Downloads/cat_test1.MOV",
                         help="Path to input video file")
@@ -375,7 +377,6 @@ def main():
     args = parser.parse_args()
     
     # Update threshold if provided
-    global DETECTION_THRESHOLD
     if args.threshold != DETECTION_THRESHOLD:
         DETECTION_THRESHOLD = args.threshold
         print(f"Using custom detection threshold: {DETECTION_THRESHOLD}")
