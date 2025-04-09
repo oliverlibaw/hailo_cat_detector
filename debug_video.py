@@ -90,8 +90,7 @@ def load_model():
             output_confidence_threshold=DETECTION_THRESHOLD,
             overlay_line_width=3,  # Thicker lines for better visibility
             overlay_font_scale=1.5,  # Font scale for overlay
-            overlay_show_probabilities=True,  # Show confidence scores
-            batch_size=1  # Set batch size to 1 for consistent performance
+            overlay_show_probabilities=True  # Show confidence scores
         )
         
         print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
