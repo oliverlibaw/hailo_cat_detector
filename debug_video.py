@@ -108,6 +108,9 @@ def process_detections(frame, results):
     detections = []
     
     try:
+        # Get frame dimensions for scaling
+        frame_height, frame_width = frame.shape[:2]
+        
         # YOLO11s model sometimes returns results directly in 'results' and sometimes in 'results.results'
         if hasattr(results, 'results') and results.results:
             result_list = results.results
@@ -167,6 +170,15 @@ def process_detections(frame, results):
                 if None in (x1, y1, x2, y2, score, class_id):
                     continue
                 
+                # Scale coordinates to match frame size
+                scale_x = frame_width / MODEL_INPUT_SIZE[0]
+                scale_y = frame_height / MODEL_INPUT_SIZE[1]
+                
+                x1 = int(x1 * scale_x)
+                y1 = int(y1 * scale_y)
+                x2 = int(x2 * scale_x)
+                y2 = int(y2 * scale_y)
+                
                 # For this debug script, we want to see all detections, not just cats
                 # But highlight cats specifically
                 is_cat = (class_id == CAT_CLASS_ID)
@@ -174,11 +186,10 @@ def process_detections(frame, results):
                 # Add detection if it meets threshold
                 if score >= DETECTION_THRESHOLD:
                     # Make sure coordinates are within image bounds
-                    height, width = frame.shape[:2]
-                    x1 = max(0, min(width-1, x1))
-                    y1 = max(0, min(height-1, y1))
-                    x2 = max(0, min(width-1, x2))
-                    y2 = max(0, min(height-1, y2))
+                    x1 = max(0, min(frame_width-1, x1))
+                    y1 = max(0, min(frame_height-1, y1))
+                    x2 = max(0, min(frame_width-1, x2))
+                    y2 = max(0, min(frame_height-1, y2))
                     
                     # Only add if the box has reasonable size
                     if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
