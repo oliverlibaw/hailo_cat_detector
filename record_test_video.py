@@ -8,7 +8,6 @@ import sys
 import time
 import os
 import subprocess
-import venv
 
 def check_and_install_packages():
     """Check for required packages and install them if missing."""
@@ -16,13 +15,13 @@ def check_and_install_packages():
     system_packages = [
         "python3-picamera2",
         "libcamera-tools",
-        "ffmpeg"
+        "ffmpeg",
+        "python3-libcamera"  # Add the Python bindings for libcamera
     ]
     
     # Python packages (to be installed in virtual environment)
     python_packages = [
-        "libcamera",
-        "picamera2"
+        "picamera2"  # Only picamera2 needs to be installed via pip
     ]
     
     print("Checking for required system packages...")
@@ -53,9 +52,9 @@ def check_and_install_packages():
     
     print("\nChecking for required Python packages...")
     try:
-        # Try to import libcamera to check if it's installed
-        import libcamera
-        print("libcamera Python package is installed!")
+        # Try to import picamera2 to check if it's installed
+        import picamera2
+        print("picamera2 Python package is installed!")
     except ImportError:
         print("Installing required Python packages...")
         try:
