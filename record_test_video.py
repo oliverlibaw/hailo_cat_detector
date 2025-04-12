@@ -131,21 +131,17 @@ def record_video():
     picam2 = setup_camera()
     
     try:
-        # Create encoder with specific settings
-        encoder = H264Encoder(
-            bitrate=10000000,  # 10 Mbps
-            repeat=True,       # Repeat headers
-            iperiod=15,        # Keyframe interval
-            framerate=VIDEO_FPS
-        )
-        
-        # Create output with specific settings
-        output = FfmpegOutput(
+        # Configure FFmpeg output with correct parameters
+        encoder = picam2.encoders.H264Encoder()
+        output = picam2.outputs.FfmpegOutput(
             output_path,
             audio=False,
-            vcodec='libx264',
-            pix_fmt='yuv420p',  # Match the camera format
-            preset='ultrafast'  # Faster encoding
+            video=True,
+            format='mp4',
+            codec='h264',
+            bitrate=5000000,  # 5 Mbps
+            framerate=30,
+            quality=23
         )
         
         # Start recording
