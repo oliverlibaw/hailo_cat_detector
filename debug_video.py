@@ -13,50 +13,35 @@ import time
 import numpy as np
 import argparse
 
-# Configuration - matching the main script
-MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo"
-MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
-DETECTION_THRESHOLD = 0.25  # Slightly lower than main.py for testing
-MODEL_INPUT_SIZE = (640, 640)
-CAT_CLASS_ID = 15  # COCO dataset cat class ID
+# Configuration
+MODEL_INPUT_SIZE = (640, 640)  # YOLO11n model input size
+DETECTION_THRESHOLD = 0.5  # Increased threshold for better accuracy
+MODEL_TO_LOAD = "yolov11n_coco"  # Using YOLOv11n model
+ZOO_PATH = "/opt/deGirum/ModelZoo"  # Path to model zoo
 
-# COCO class names for reference
+# COCO class IDs for cats and dogs
+CAT_CLASS_ID = 15  # cat
+DOG_CLASS_ID = 16  # dog
+
+# COCO class names (only including cats and dogs for clarity)
 COCO_CLASSES = {
-    0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 
-    6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant', 
-    11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat', 
-    16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear', 
-    22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 
-    27: 'tie', 28: 'suitcase', 29: 'frisbee', 30: 'skis', 31: 'snowboard', 
-    32: 'sports ball', 33: 'kite', 34: 'baseball bat', 35: 'baseball glove', 
-    36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle', 
-    40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl', 
-    46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli', 
-    51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake', 56: 'chair', 
-    57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table', 61: 'toilet', 
-    62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone', 
-    68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator', 
-    73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear', 
-    78: 'hair drier', 79: 'toothbrush'
+    CAT_CLASS_ID: "cat",
+    DOG_CLASS_ID: "dog"
 }
 
-# Colors for visualization
+# Colors for visualization (using distinct colors for cats and dogs)
 COLORS = [
-    (0, 255, 0),   # Green
-    (255, 0, 0),   # Blue
-    (0, 0, 255),   # Red
-    (255, 255, 0), # Cyan
-    (255, 0, 255), # Magenta
-    (0, 255, 255)  # Yellow
+    (0, 255, 0),    # Green for cats
+    (255, 0, 0)     # Red for dogs
 ]
 
 
 def load_model():
     """Load the YOLO11s model for detection."""
     try:
-        print(f"Loading YOLO11s model: {MODEL_NAME}")
-        model_to_load = MODEL_NAME
-        zoo_path = MODEL_ZOO_PATH
+        print(f"Loading YOLO11s model: {MODEL_TO_LOAD}")
+        model_to_load = MODEL_TO_LOAD
+        zoo_path = ZOO_PATH
         
         import degirum as dg
         
@@ -104,14 +89,14 @@ def load_model():
 
 
 def process_detections(frame, results):
-    """Process detection results and extract detections for cats."""
+    """Process detection results and extract detections for cats and dogs."""
     detections = []
     
     try:
         # Get frame dimensions for scaling
         frame_height, frame_width = frame.shape[:2]
         
-        # YOLO11s model sometimes returns results directly in 'results' and sometimes in 'results.results'
+        # YOLO11n model sometimes returns results directly in 'results' and sometimes in 'results.results'
         if hasattr(results, 'results') and results.results:
             result_list = results.results
             print(f"Processing {len(result_list)} detections from results.results")
@@ -179,9 +164,9 @@ def process_detections(frame, results):
                 x2 = int(x2 * scale_x)
                 y2 = int(y2 * scale_y)
                 
-                # For this debug script, we want to see all detections, not just cats
-                # But highlight cats specifically
-                is_cat = (class_id == CAT_CLASS_ID)
+                # Only process cats and dogs
+                if class_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
+                    continue
                 
                 # Add detection if it meets threshold
                 if score >= DETECTION_THRESHOLD:
@@ -193,6 +178,7 @@ def process_detections(frame, results):
                     
                     # Only add if the box has reasonable size
                     if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
+                        is_cat = (class_id == CAT_CLASS_ID)
                         detections.append((x1, y1, x2, y2, score, class_id, is_cat))
                         print(f"Added detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}, class={class_id} ({COCO_CLASSES.get(class_id, 'unknown')})")
             
@@ -218,7 +204,7 @@ def draw_detections(frame, detections):
     
     # Add header with model info
     height, width = annotated_frame.shape[:2]
-    model_text = f"Model: YOLO11s"
+    model_text = f"Model: YOLO11n (Cats & Dogs)"
     threshold_text = f"Threshold: {DETECTION_THRESHOLD:.2f}"
     
     cv2.rectangle(annotated_frame, (0, 0), (300, 70), (0, 0, 0), -1)
@@ -234,13 +220,13 @@ def draw_detections(frame, detections):
         # Get class name
         class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
         
-        # Get color - use special color for cats
+        # Get color - use special color for cats and dogs
         if is_cat:
-            color = (0, 255, 0)  # Green for cats
-            thickness = 3        # Thicker lines for cats
+            color = COLORS[0]  # Green for cats
+            thickness = 3      # Thicker lines for cats
         else:
-            color = COLORS[class_id % len(COLORS)]
-            thickness = 2
+            color = COLORS[1]  # Red for dogs
+            thickness = 3      # Thicker lines for dogs
         
         # Draw bounding box
         cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
@@ -258,13 +244,11 @@ def draw_detections(frame, detections):
         cv2.putText(annotated_frame, label, (x1+5, y1-5), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                     
-        # For cats, add additional highlight
-        if is_cat:
-            # Draw crosshair at center
-            center_x = (x1 + x2) // 2
-            center_y = (y1 + y2) // 2
-            cv2.drawMarker(annotated_frame, (center_x, center_y), 
-                          (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
+        # Add crosshair at center
+        center_x = (x1 + x2) // 2
+        center_y = (y1 + y2) // 2
+        cv2.drawMarker(annotated_frame, (center_x, center_y), 
+                      (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
     
     # Add timestamp
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -375,7 +359,7 @@ def main():
     global DETECTION_THRESHOLD  # Move global declaration to beginning of function
     
     parser = argparse.ArgumentParser(description="Process a video file to detect cats.")
-    parser.add_argument("--input", "-i", type=str, default="/home/pi5/Downloads/cat_test1.MOV",
+    parser.add_argument("--input", "-i", type=str, default="/home/pi5/Downloads/cat_test2_640x640.mp4",
                         help="Path to input video file")
     parser.add_argument("--output", "-o", type=str, default="debug_output.mp4",
                         help="Path to output video file")
