@@ -8,40 +8,65 @@ import sys
 import time
 import os
 import subprocess
+import venv
 
 def check_and_install_packages():
     """Check for required packages and install them if missing."""
-    required_packages = [
+    # System packages
+    system_packages = [
         "python3-picamera2",
         "libcamera-tools",
         "ffmpeg"
     ]
     
-    print("Checking for required packages...")
-    missing_packages = []
+    # Python packages (to be installed in virtual environment)
+    python_packages = [
+        "libcamera",
+        "picamera2"
+    ]
     
-    for package in required_packages:
+    print("Checking for required system packages...")
+    missing_system_packages = []
+    
+    for package in system_packages:
         try:
             subprocess.run(["dpkg", "-l", package], check=True, 
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except subprocess.CalledProcessError:
-            missing_packages.append(package)
+            missing_system_packages.append(package)
     
-    if missing_packages:
-        print(f"Missing required packages: {', '.join(missing_packages)}")
-        print("Installing missing packages...")
+    if missing_system_packages:
+        print(f"Missing required system packages: {', '.join(missing_system_packages)}")
+        print("Installing missing system packages...")
         try:
             subprocess.run(["sudo", "apt-get", "update"], check=True)
-            subprocess.run(["sudo", "apt-get", "install", "-y"] + missing_packages, check=True)
-            print("Packages installed successfully!")
+            subprocess.run(["sudo", "apt-get", "install", "-y"] + missing_system_packages, check=True)
+            print("System packages installed successfully!")
         except subprocess.CalledProcessError as e:
-            print(f"Error installing packages: {e}")
+            print(f"Error installing system packages: {e}")
             print("Please run the following commands manually:")
             print("sudo apt-get update")
-            print(f"sudo apt-get install -y {' '.join(missing_packages)}")
+            print(f"sudo apt-get install -y {' '.join(missing_system_packages)}")
             sys.exit(1)
     else:
-        print("All required packages are installed!")
+        print("All required system packages are installed!")
+    
+    print("\nChecking for required Python packages...")
+    try:
+        # Try to import libcamera to check if it's installed
+        import libcamera
+        print("libcamera Python package is installed!")
+    except ImportError:
+        print("Installing required Python packages...")
+        try:
+            # Install packages in the current virtual environment
+            subprocess.run([sys.executable, "-m", "pip", "install"] + python_packages, check=True)
+            print("Python packages installed successfully!")
+        except subprocess.CalledProcessError as e:
+            print(f"Error installing Python packages: {e}")
+            print("Please run the following command manually:")
+            print(f"pip install {' '.join(python_packages)}")
+            sys.exit(1)
 
 # Check packages before importing picamera2
 check_and_install_packages()
