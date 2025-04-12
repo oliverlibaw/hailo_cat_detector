@@ -8,6 +8,7 @@ import sys
 import time
 import os
 import subprocess
+import site
 
 def check_and_install_packages():
     """Check for required packages and install them if missing."""
@@ -17,11 +18,6 @@ def check_and_install_packages():
         "libcamera-tools",
         "ffmpeg",
         "python3-libcamera"  # Add the Python bindings for libcamera
-    ]
-    
-    # Python packages (to be installed in virtual environment)
-    python_packages = [
-        "picamera2"  # Only picamera2 needs to be installed via pip
     ]
     
     print("Checking for required system packages...")
@@ -50,22 +46,24 @@ def check_and_install_packages():
     else:
         print("All required system packages are installed!")
     
+    # Add system site-packages to Python path
+    system_site_packages = [p for p in site.getsitepackages() if 'dist-packages' in p]
+    if system_site_packages:
+        sys.path.extend(system_site_packages)
+        print(f"Added system site-packages to Python path: {system_site_packages[0]}")
+    
     print("\nChecking for required Python packages...")
     try:
-        # Try to import picamera2 to check if it's installed
-        import picamera2
-        print("picamera2 Python package is installed!")
+        # Try to import libcamera to check if it's accessible
+        import libcamera
+        print("libcamera is accessible!")
     except ImportError:
-        print("Installing required Python packages...")
-        try:
-            # Install packages in the current virtual environment
-            subprocess.run([sys.executable, "-m", "pip", "install"] + python_packages, check=True)
-            print("Python packages installed successfully!")
-        except subprocess.CalledProcessError as e:
-            print(f"Error installing Python packages: {e}")
-            print("Please run the following command manually:")
-            print(f"pip install {' '.join(python_packages)}")
-            sys.exit(1)
+        print("Error: libcamera is not accessible in the virtual environment.")
+        print("Please run the following command to make system packages available:")
+        print("python3 -m venv --system-site-packages cat_venv")
+        print("Then reactivate your virtual environment:")
+        print("source cat_venv/bin/activate")
+        sys.exit(1)
 
 # Check packages before importing picamera2
 check_and_install_packages()
