@@ -4,8 +4,49 @@ Script to record a test video using the Raspberry Pi camera.
 Records a 2-minute video at 640x640 resolution, optimized for the YOLO11s model.
 """
 
+import sys
 import time
 import os
+import subprocess
+
+def check_and_install_packages():
+    """Check for required packages and install them if missing."""
+    required_packages = [
+        "python3-picamera2",
+        "libcamera-tools",
+        "ffmpeg"
+    ]
+    
+    print("Checking for required packages...")
+    missing_packages = []
+    
+    for package in required_packages:
+        try:
+            subprocess.run(["dpkg", "-l", package], check=True, 
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError:
+            missing_packages.append(package)
+    
+    if missing_packages:
+        print(f"Missing required packages: {', '.join(missing_packages)}")
+        print("Installing missing packages...")
+        try:
+            subprocess.run(["sudo", "apt-get", "update"], check=True)
+            subprocess.run(["sudo", "apt-get", "install", "-y"] + missing_packages, check=True)
+            print("Packages installed successfully!")
+        except subprocess.CalledProcessError as e:
+            print(f"Error installing packages: {e}")
+            print("Please run the following commands manually:")
+            print("sudo apt-get update")
+            print(f"sudo apt-get install -y {' '.join(missing_packages)}")
+            sys.exit(1)
+    else:
+        print("All required packages are installed!")
+
+# Check packages before importing picamera2
+check_and_install_packages()
+
+# Now import picamera2 after ensuring packages are installed
 from picamera2 import Picamera2
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
