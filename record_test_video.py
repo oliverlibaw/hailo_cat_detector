@@ -86,10 +86,20 @@ def setup_camera():
     print("Initializing camera...")
     picam2 = Picamera2()
     
-    # Configure video settings
+    # Configure video settings with proper color format
     video_config = picam2.create_video_configuration(
-        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "RGB888"},
-        controls={"FrameRate": VIDEO_FPS}
+        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "YUV420"},  # Changed to YUV420
+        controls={
+            "FrameRate": VIDEO_FPS,
+            "AwbMode": 0,  # Auto white balance
+            "AeEnable": True,   # Auto exposure
+            "ExposureTime": 10000,  # Initial exposure time in microseconds
+            "AnalogueGain": 1.0,    # Initial analog gain
+            "ColourGains": (1.0, 1.0),  # Initial color gains
+            "Brightness": 0.0,  # Adjust brightness
+            "Contrast": 1.0,    # Adjust contrast
+            "Saturation": 1.0   # Adjust saturation
+        }
     )
     
     # Apply configuration
@@ -101,7 +111,10 @@ def setup_camera():
         "AeEnable": True,   # Auto exposure
         "ExposureTime": 10000,  # Initial exposure time in microseconds
         "AnalogueGain": 1.0,    # Initial analog gain
-        "ColourGains": (1.0, 1.0)  # Initial color gains
+        "ColourGains": (1.0, 1.0),  # Initial color gains
+        "Brightness": 0.0,  # Adjust brightness
+        "Contrast": 1.0,    # Adjust contrast
+        "Saturation": 1.0   # Adjust saturation
     })
     
     return picam2
@@ -118,9 +131,22 @@ def record_video():
     picam2 = setup_camera()
     
     try:
-        # Create encoder and output
-        encoder = H264Encoder()
-        output = FfmpegOutput(output_path)
+        # Create encoder with specific settings
+        encoder = H264Encoder(
+            bitrate=10000000,  # 10 Mbps
+            repeat=True,       # Repeat headers
+            iperiod=15,        # Keyframe interval
+            framerate=VIDEO_FPS
+        )
+        
+        # Create output with specific settings
+        output = FfmpegOutput(
+            output_path,
+            audio=False,
+            vcodec='libx264',
+            pix_fmt='yuv420p',  # Match the camera format
+            preset='ultrafast'  # Faster encoding
+        )
         
         # Start recording
         print(f"Starting recording for {VIDEO_DURATION} seconds...")
