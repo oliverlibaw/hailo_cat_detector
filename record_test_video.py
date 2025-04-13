@@ -136,7 +136,6 @@ def record_video():
         output = FfmpegOutput(
             output_path,
             audio=False,
-            format='mp4',
             codec='h264',
             framerate=30,
             quality=23
