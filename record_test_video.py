@@ -86,19 +86,26 @@ def setup_camera():
     print("Initializing camera...")
     picam2 = Picamera2()
     
-    # Configure video settings with proper color format
+    # Configure video settings with proper color format and processing
     video_config = picam2.create_video_configuration(
-        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "RGB888"},
+        main={
+            "size": (VIDEO_WIDTH, VIDEO_HEIGHT),
+            "format": "XBGR8888"  # Use XBGR format for better color handling
+        },
+        raw={
+            "size": (VIDEO_WIDTH, VIDEO_HEIGHT),
+            "format": "SBGGR10_CSI2P"  # Raw sensor format
+        },
         controls={
             "FrameRate": VIDEO_FPS,
-            "AwbMode": 0,  # Auto white balance
+            "AwbEnable": True,  # Auto white balance
             "AeEnable": True,   # Auto exposure
-            "ExposureTime": 10000,  # Initial exposure time in microseconds
-            "AnalogueGain": 1.0,    # Initial analog gain
+            "ExposureTime": 20000,  # Increased initial exposure time
+            "AnalogueGain": 2.0,    # Increased initial gain
             "ColourGains": (1.0, 1.0),  # Initial color gains
-            "Brightness": 0.0,  # Adjust brightness
-            "Contrast": 1.0,    # Adjust contrast
-            "Saturation": 1.0   # Adjust saturation
+            "Brightness": 0.5,  # Increased brightness
+            "Contrast": 1.2,    # Increased contrast
+            "Saturation": 1.2   # Increased saturation
         }
     )
     
@@ -109,17 +116,18 @@ def setup_camera():
     picam2.set_controls({
         "AwbEnable": True,  # Auto white balance
         "AeEnable": True,   # Auto exposure
-        "ExposureTime": 10000,  # Initial exposure time in microseconds
-        "AnalogueGain": 1.0,    # Initial analog gain
+        "ExposureTime": 20000,  # Increased initial exposure time
+        "AnalogueGain": 2.0,    # Increased initial gain
         "ColourGains": (1.0, 1.0),  # Initial color gains
-        "Brightness": 0.0,  # Adjust brightness
-        "Contrast": 1.0,    # Adjust contrast
-        "Saturation": 1.0   # Adjust saturation
+        "Brightness": 0.5,  # Increased brightness
+        "Contrast": 1.2,    # Increased contrast
+        "Saturation": 1.2   # Increased saturation
     })
     
     # Print camera configuration for debugging
     print("Camera configuration:")
     print(f"Main stream: {video_config['main']}")
+    print(f"Raw stream: {video_config['raw']}")
     print(f"Controls: {video_config['controls']}")
     
     return picam2
