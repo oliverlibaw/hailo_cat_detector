@@ -86,7 +86,7 @@ def setup_camera():
     print("Initializing camera...")
     picam2 = Picamera2()
     
-    # Configure video settings with proper color format and processing
+    # Configure video settings with standard Pi camera settings
     video_config = picam2.create_video_configuration(
         main={
             "size": (VIDEO_WIDTH, VIDEO_HEIGHT),
@@ -100,12 +100,14 @@ def setup_camera():
             "FrameRate": VIDEO_FPS,
             "AwbEnable": True,  # Auto white balance
             "AeEnable": True,   # Auto exposure
-            "ExposureTime": 20000,  # Initial exposure time
-            "AnalogueGain": 2.0,    # Initial gain
-            "ColourGains": (1.5, 1.0),  # Adjusted color gains to reduce green tint
-            "Brightness": 0.5,  # Brightness
-            "Contrast": 1.2,    # Contrast
-            "Saturation": 1.2   # Saturation
+            "AeExposureMode": 0,  # Normal exposure mode
+            "AeMeteringMode": 0,  # Centre-weighted metering
+            "ExposureTime": 0,    # Let auto-exposure handle it
+            "AnalogueGain": 1.0,  # Let auto-gain handle it
+            "ColourGains": (1.0, 1.0),  # Let auto-white balance handle it
+            "Brightness": 0.0,    # Default brightness
+            "Contrast": 1.0,      # Default contrast
+            "Saturation": 1.0     # Default saturation
         }
     )
     
@@ -116,12 +118,14 @@ def setup_camera():
     picam2.set_controls({
         "AwbEnable": True,  # Auto white balance
         "AeEnable": True,   # Auto exposure
-        "ExposureTime": 20000,  # Initial exposure time
-        "AnalogueGain": 2.0,    # Initial gain
-        "ColourGains": (1.5, 1.0),  # Adjusted color gains to reduce green tint
-        "Brightness": 0.5,  # Brightness
-        "Contrast": 1.2,    # Contrast
-        "Saturation": 1.2   # Saturation
+        "AeExposureMode": 0,  # Normal exposure mode
+        "AeMeteringMode": 0,  # Centre-weighted metering
+        "ExposureTime": 0,    # Let auto-exposure handle it
+        "AnalogueGain": 1.0,  # Let auto-gain handle it
+        "ColourGains": (1.0, 1.0),  # Let auto-white balance handle it
+        "Brightness": 0.0,    # Default brightness
+        "Contrast": 1.0,      # Default contrast
+        "Saturation": 1.0     # Default saturation
     })
     
     # Print camera configuration for debugging
