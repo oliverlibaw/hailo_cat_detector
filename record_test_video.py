@@ -100,12 +100,12 @@ def setup_camera():
             "FrameRate": VIDEO_FPS,
             "AwbEnable": True,  # Auto white balance
             "AeEnable": True,   # Auto exposure
-            "ExposureTime": 20000,  # Increased initial exposure time
-            "AnalogueGain": 2.0,    # Increased initial gain
-            "ColourGains": (1.0, 1.0),  # Initial color gains
-            "Brightness": 0.5,  # Increased brightness
-            "Contrast": 1.2,    # Increased contrast
-            "Saturation": 1.2   # Increased saturation
+            "ExposureTime": 20000,  # Initial exposure time
+            "AnalogueGain": 2.0,    # Initial gain
+            "ColourGains": (1.5, 1.0),  # Adjusted color gains to reduce green tint
+            "Brightness": 0.5,  # Brightness
+            "Contrast": 1.2,    # Contrast
+            "Saturation": 1.2   # Saturation
         }
     )
     
@@ -116,12 +116,12 @@ def setup_camera():
     picam2.set_controls({
         "AwbEnable": True,  # Auto white balance
         "AeEnable": True,   # Auto exposure
-        "ExposureTime": 20000,  # Increased initial exposure time
-        "AnalogueGain": 2.0,    # Increased initial gain
-        "ColourGains": (1.0, 1.0),  # Initial color gains
-        "Brightness": 0.5,  # Increased brightness
-        "Contrast": 1.2,    # Increased contrast
-        "Saturation": 1.2   # Increased saturation
+        "ExposureTime": 20000,  # Initial exposure time
+        "AnalogueGain": 2.0,    # Initial gain
+        "ColourGains": (1.5, 1.0),  # Adjusted color gains to reduce green tint
+        "Brightness": 0.5,  # Brightness
+        "Contrast": 1.2,    # Contrast
+        "Saturation": 1.2   # Saturation
     })
     
     # Print camera configuration for debugging
