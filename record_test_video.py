@@ -132,8 +132,8 @@ def record_video():
     
     try:
         # Configure FFmpeg output with correct parameters
-        encoder = picam2.encoders.H264Encoder(bitrate=5000000)  # 5 Mbps
-        output = picam2.outputs.FfmpegOutput(
+        encoder = H264Encoder(bitrate=5000000)  # 5 Mbps
+        output = FfmpegOutput(
             output_path,
             audio=False,
             video=True,
