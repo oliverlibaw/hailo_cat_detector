@@ -88,7 +88,7 @@ def setup_camera():
     
     # Configure video settings with proper color format
     video_config = picam2.create_video_configuration(
-        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "YUV420"},  # Changed to YUV420
+        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "RGB888"},
         controls={
             "FrameRate": VIDEO_FPS,
             "AwbMode": 0,  # Auto white balance
@@ -116,6 +116,11 @@ def setup_camera():
         "Contrast": 1.0,    # Adjust contrast
         "Saturation": 1.0   # Adjust saturation
     })
+    
+    # Print camera configuration for debugging
+    print("Camera configuration:")
+    print(f"Main stream: {video_config['main']}")
+    print(f"Controls: {video_config['controls']}")
     
     return picam2
 
