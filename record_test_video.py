@@ -133,12 +133,7 @@ def record_video():
     try:
         # Configure FFmpeg output with correct parameters
         encoder = H264Encoder(bitrate=5000000)  # 5 Mbps
-        output = FfmpegOutput(
-            output_path,
-            audio=False,
-            framerate=30,
-            quality=23
-        )
+        output = FfmpegOutput(output_path)
         
         # Start recording
         print(f"Starting recording for {VIDEO_DURATION} seconds...")
