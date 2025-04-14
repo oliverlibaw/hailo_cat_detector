@@ -75,21 +75,27 @@ def load_model():
         test_frame = np.zeros((640, 640, 3), dtype=np.uint8)
         results = model.predict_batch([test_frame])
         
-        # Print first detection to see structure
-        if results and results[0].results:
-            print("\nSample detection structure:")
-            print(results[0].results[0])
-            print()
-            
-            # Print available classes from the first detection
+        # Process the generator to get results
+        seen_classes = set()
+        for result in results:
+            if result.results:
+                print("\nSample detection structure:")
+                print(result.results[0])
+                print()
+                
+                # Collect all unique classes
+                for detection in result.results:
+                    if 'label' in detection:
+                        seen_classes.add(detection['label'])
+        
+        # Print available classes
+        if seen_classes:
             print("Available classes in detections:")
-            seen_classes = set()
-            for detection in results[0].results:
-                if 'label' in detection:
-                    seen_classes.add(detection['label'])
             for class_name in sorted(seen_classes):
                 print(f"- {class_name}")
             print()
+        else:
+            print("No detections found in test inference")
         
         print(f"Model loaded successfully")
         return model
