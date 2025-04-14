@@ -14,8 +14,8 @@ import numpy as np
 import argparse
 
 # Configuration
-MODEL_NAME = "yolov11n_coco"  # Using COCO model for better detection
-MODEL_ZOO_PATH = "/home/pi5/Projects/hailo_cat_detector/ModelZoo"  # Updated model zoo path
+MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # Updated model name
+MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo"  # Updated model zoo path
 DETECTION_THRESHOLD = 0.5  # Confidence threshold for detections
 VIDEO_PATH = "/home/pi5/Projects/hailo_cat_detector/test_videos/pi_camera_test_640x640.mp4"
 OUTPUT_PATH = "debug_output.mp4"
