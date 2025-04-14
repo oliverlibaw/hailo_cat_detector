@@ -192,6 +192,8 @@ def process_video(input_path, output_path):
 
 def main():
     """Main function"""
+    global DETECTION_THRESHOLD  # Declare DETECTION_THRESHOLD as global
+    
     parser = argparse.ArgumentParser(description="Process a video file to detect cats and dogs.")
     parser.add_argument("--input", "-i", type=str, default=VIDEO_PATH,
                         help="Path to input video file")
