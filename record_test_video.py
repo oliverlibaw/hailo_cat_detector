@@ -46,9 +46,7 @@ def record_test_video(output_path, duration):
                 "size": (VIDEO_WIDTH, VIDEO_HEIGHT),
                 "format": "XBGR8888"  # Use XBGR for better color handling
             },
-            controls=CAMERA_SETTINGS,
-            encode="main",  # Specify the stream to encode
-            quality=Quality.MEDIUM  # Set quality here instead of in encoder
+            controls=CAMERA_SETTINGS
         )
         
         # Apply the configuration
@@ -60,7 +58,8 @@ def record_test_video(output_path, duration):
 
         # Setup encoder with balanced quality settings
         encoder = H264Encoder(
-            bitrate=2000000  # 2 Mbps is sufficient for 640x640
+            bitrate=2000000,  # 2 Mbps is sufficient for 640x640
+            quality=Quality.MEDIUM  # Set quality in encoder
         )
         
         # Setup output with efficient codec settings
