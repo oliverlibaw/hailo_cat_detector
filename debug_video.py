@@ -157,10 +157,10 @@ def preprocess_frame(frame, target_shape=(640, 640)):
     # Convert BGR to RGB
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
-    # Resize to target shape
+    # Resize to target shape using bilinear interpolation
     resized = cv2.resize(frame_rgb, target_shape, interpolation=cv2.INTER_LINEAR)
     
-    # Convert to uint8 (0-255 range)
+    # Ensure the image is in uint8 format (0-255 range)
     normalized = resized.astype(np.uint8)
     
     # Add batch dimension
@@ -176,11 +176,14 @@ def load_model(model_name, zoo_path):
             print(f"ERROR: Model zoo path not found: {zoo_path}")
             return None
 
-        # Load the model
+        # Load the model with specific backend settings
         model = dg.load_model(
             model_name=model_name,
             inference_host_address="@local",
-            zoo_url=zoo_path
+            zoo_url=zoo_path,
+            image_backend="opencv",  # Explicitly set image backend
+            input_pad_method="stretch",  # Use stretch padding
+            input_resize_method="bilinear"  # Use bilinear interpolation
         )
 
         # Print model information
@@ -195,7 +198,7 @@ def load_model(model_name, zoo_path):
         # Run a test inference to verify model works
         print("\nRunning test inference...")
         test_frame = np.zeros((input_shape[1], input_shape[2], input_shape[3]), dtype=np.uint8)
-        test_batch = preprocess_frame(test_frame)  # Use the new preprocessing function
+        test_batch = preprocess_frame(test_frame)  # Use the preprocessing function
         
         # Run inference and collect results
         results = list(model.predict_batch([test_batch]))  # Convert generator to list
