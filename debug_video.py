@@ -154,18 +154,17 @@ def preprocess_frame(frame, target_shape=(640, 640)):
     Returns:
         preprocessed_frame (ndarray): Preprocessed frame ready for model input
     """
-    # Convert BGR to RGB
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # For OpenCV backend, we need to keep the image in BGR format
+    # and ensure it's in the correct shape and type
     
     # Resize to target shape using bilinear interpolation
-    resized = cv2.resize(frame_rgb, target_shape, interpolation=cv2.INTER_LINEAR)
+    resized = cv2.resize(frame, target_shape, interpolation=cv2.INTER_LINEAR)
     
     # Ensure the image is in uint8 format (0-255 range)
     normalized = resized.astype(np.uint8)
     
     # Add batch dimension and ensure correct shape
     # For OpenCV backend, we need to ensure the shape is exactly (1, height, width, 3)
-    # and the data type is uint8
     batched = np.expand_dims(normalized, axis=0)
     
     # Verify the shape matches exactly what the model expects
