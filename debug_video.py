@@ -80,7 +80,7 @@ def load_model():
         return None
 
 
-def process_frame(frame):
+def process_frame(frame, model):
     """Process a single frame for detection."""
     # Convert frame to RGB for better color handling
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -142,8 +142,8 @@ def process_video(input_path, output_path):
             if not ret:
                 break
             
-            # Process frame
-            processed_frame = process_frame(frame)
+            # Process frame with the model
+            processed_frame = process_frame(frame, model)
             
             # Write frame
             out.write(processed_frame)
