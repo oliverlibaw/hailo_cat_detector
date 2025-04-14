@@ -12,11 +12,12 @@ import cv2
 import time
 import numpy as np
 import argparse
+import degirum as dg
 
 # Configuration
-MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # Updated model name
-MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo"  # Updated model zoo path
-DETECTION_THRESHOLD = 0.5  # Confidence threshold for detections
+MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
+MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo"
+DETECTION_THRESHOLD = 0.5
 VIDEO_PATH = "/home/pi5/Projects/hailo_cat_detector/test_videos/pi_camera_test_640x640.mp4"
 OUTPUT_PATH = "debug_output.mp4"
 
@@ -41,7 +42,6 @@ def load_model():
     """Load the YOLO11s model for detection."""
     try:
         print(f"Loading YOLO11s model: {MODEL_NAME}")
-        import degirum as dg
         
         # Check if model zoo path exists
         if not os.path.exists(MODEL_ZOO_PATH):
@@ -49,28 +49,14 @@ def load_model():
             print("Please make sure the ModelZoo directory exists and contains the model files.")
             return None
         
-        # List available models for debugging
-        try:
-            available_models = [f for f in os.listdir(MODEL_ZOO_PATH) 
-                              if f.endswith(".hef") or os.path.isdir(os.path.join(MODEL_ZOO_PATH, f))]
-            print(f"Available models in {MODEL_ZOO_PATH}:")
-            for model in available_models:
-                print(f"  - {model}")
-        except Exception as e:
-            print(f"Warning: Could not list contents of model zoo directory: {e}")
-        
-        # Load the model with supported parameters
+        # Load the model with minimal parameters
         model = dg.load_model(
             model_name=MODEL_NAME,
             inference_host_address="@local",
-            zoo_url=MODEL_ZOO_PATH,
-            output_confidence_threshold=DETECTION_THRESHOLD,
-            overlay_line_width=3,
-            overlay_font_scale=1.5,
-            overlay_show_probabilities=True
+            zoo_url=MODEL_ZOO_PATH
         )
         
-        print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
+        print(f"Model loaded successfully")
         return model
         
     except Exception as e:
@@ -90,22 +76,23 @@ def process_frame(frame, model):
     
     # Process detections
     for result in results:
-        # Print the structure of the first detection for debugging
-        if result.results and len(result.results) > 0:
-            print("First detection structure:", result.results[0])
-        
         for detection in result.results:
             try:
-                # Access detection properties using dictionary syntax
+                # Access detection properties
                 score = detection['score']
+                class_id = detection['class_id']
+                
+                # Only process cats and dogs
+                if class_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
+                    continue
+                
                 if score >= DETECTION_THRESHOLD:
                     # Get bounding box coordinates
                     bbox = detection['bbox']
                     x1, y1, x2, y2 = bbox
                     
-                    # Get class ID and map to class name
-                    class_id = detection['class_id']
-                    class_name = COCO_CLASSES.get(class_id, f"class_{class_id}")
+                    # Get class name
+                    class_name = COCO_CLASSES[class_id]
                     
                     # Get color based on class
                     color = COLORS[0] if class_id == CAT_CLASS_ID else COLORS[1]
@@ -113,10 +100,14 @@ def process_frame(frame, model):
                     # Draw bounding box
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
                     
-                    # Add label
+                    # Add label with confidence score
                     label = f"{class_name}: {score:.2f}"
                     cv2.putText(frame, label, (int(x1), int(y1) - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    
+                    # Print detection info for debugging
+                    print(f"Detected {class_name} with confidence {score:.2f} at [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}]")
+                    
             except KeyError as e:
                 print(f"Warning: Missing key in detection: {e}")
                 print("Detection structure:", detection)
@@ -151,7 +142,7 @@ def process_video(input_path, output_path):
     print(f"Video properties: {width}x{height}, {fps} FPS, {frame_count} frames")
     
     # Create output video writer
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # or 'XVID' or other codec
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
     # Process each frame
@@ -201,12 +192,10 @@ def process_video(input_path, output_path):
 
 def main():
     """Main function"""
-    global DETECTION_THRESHOLD  # Move global declaration to beginning of function
-    
-    parser = argparse.ArgumentParser(description="Process a video file to detect cats.")
-    parser.add_argument("--input", "-i", type=str, default="/home/pi5/Projects/hailo_cat_detector/test_videos/pi_camera_test_640x640.mp4",
+    parser = argparse.ArgumentParser(description="Process a video file to detect cats and dogs.")
+    parser.add_argument("--input", "-i", type=str, default=VIDEO_PATH,
                         help="Path to input video file")
-    parser.add_argument("--output", "-o", type=str, default="debug_output.mp4",
+    parser.add_argument("--output", "-o", type=str, default=OUTPUT_PATH,
                         help="Path to output video file")
     parser.add_argument("--threshold", "-t", type=float, default=DETECTION_THRESHOLD,
                         help=f"Detection threshold (default: {DETECTION_THRESHOLD})")
