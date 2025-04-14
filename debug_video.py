@@ -164,11 +164,17 @@ def preprocess_frame(frame, target_shape=(640, 640)):
     normalized = resized.astype(np.uint8)
     
     # Add batch dimension and ensure correct shape
+    # For OpenCV backend, we need to ensure the shape is exactly (1, height, width, 3)
+    # and the data type is uint8
     batched = np.expand_dims(normalized, axis=0)
     
-    # Ensure the shape matches exactly what the model expects
+    # Verify the shape matches exactly what the model expects
     if batched.shape != (1, 640, 640, 3):
         raise ValueError(f"Invalid shape: {batched.shape}. Expected (1, 640, 640, 3)")
+    
+    # Ensure the data type is uint8
+    if batched.dtype != np.uint8:
+        batched = batched.astype(np.uint8)
     
     return batched
 
@@ -199,7 +205,8 @@ def load_model(model_name, zoo_path):
         
         # Run a test inference to verify model works
         print("\nRunning test inference...")
-        test_frame = np.zeros((input_shape[1], input_shape[2], input_shape[3]), dtype=np.uint8)
+        # Create a test frame with the exact shape and type the model expects
+        test_frame = np.zeros((640, 640, 3), dtype=np.uint8)
         test_batch = preprocess_frame(test_frame)  # Use the preprocessing function
         
         # Run inference and collect results
