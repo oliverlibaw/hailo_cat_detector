@@ -70,12 +70,6 @@ def load_model():
         print(f"Model name: {MODEL_NAME}")
         print(f"Model zoo path: {MODEL_ZOO_PATH}")
         
-        # Get model properties
-        properties = model.properties
-        print("\nModel Properties:")
-        for key, value in properties.items():
-            print(f"{key}: {value}")
-        
         # Run a test inference to get class information
         print("\nRunning test inference to get class information...")
         test_frame = np.zeros((640, 640, 3), dtype=np.uint8)
@@ -85,6 +79,16 @@ def load_model():
         if results and results[0].results:
             print("\nSample detection structure:")
             print(results[0].results[0])
+            print()
+            
+            # Print available classes from the first detection
+            print("Available classes in detections:")
+            seen_classes = set()
+            for detection in results[0].results:
+                if 'label' in detection:
+                    seen_classes.add(detection['label'])
+            for class_name in sorted(seen_classes):
+                print(f"- {class_name}")
             print()
         
         print(f"Model loaded successfully")
@@ -134,11 +138,8 @@ def process_frame(frame, model):
                 # Print ALL detections for debugging, regardless of confidence
                 print(f"Detection: {label} (ID: {category_id}) with confidence {score:.2f}")
                 
-                # Print full detection structure for debugging
-                print("Full detection structure:", detection)
-                
                 # Only process cats and dogs
-                if category_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
+                if label.lower() not in ['cat', 'dog']:
                     continue
                 
                 # Draw bounding box regardless of confidence for cats and dogs
@@ -146,7 +147,7 @@ def process_frame(frame, model):
                 x1, y1, x2, y2 = bbox
                 
                 # Get color based on class
-                color = COLORS[0] if category_id == CAT_CLASS_ID else COLORS[1]
+                color = COLORS[0] if label.lower() == 'cat' else COLORS[1]
                 
                 # Draw bounding box
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
