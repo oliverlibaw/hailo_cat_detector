@@ -13,11 +13,12 @@ import time
 import numpy as np
 import argparse
 
-# Configuration TEST
-MODEL_INPUT_SIZE = (640, 640)  # YOLO11n model input size
-DETECTION_THRESHOLD = 0.5  # Increased threshold for better accuracy
-MODEL_TO_LOAD = "yolov11n_coco"  # Using YOLOv11n model
-ZOO_PATH = "/opt/deGirum/ModelZoo"  # Path to model zoo
+# Configuration
+MODEL_NAME = "yolov11n_coco"  # Using COCO model for better detection
+MODEL_ZOO_PATH = "/home/pi5/Projects/hailo_cat_detector/ModelZoo"  # Updated model zoo path
+DETECTION_THRESHOLD = 0.5  # Confidence threshold for detections
+VIDEO_PATH = "/home/pi5/Projects/hailo_cat_detector/test_videos/pi_camera_test_640x640.mp4"
+OUTPUT_PATH = "debug_output.mp4"
 
 # COCO class IDs for cats and dogs
 CAT_CLASS_ID = 15  # cat
@@ -39,43 +40,19 @@ COLORS = [
 def load_model():
     """Load the YOLO11s model for detection."""
     try:
-        print(f"Loading YOLO11s model: {MODEL_TO_LOAD}")
-        model_to_load = MODEL_TO_LOAD
-        zoo_path = ZOO_PATH
-        
+        print(f"Loading YOLO11s model: {MODEL_NAME}")
         import degirum as dg
-        
-        # Check if model zoo path exists
-        if not os.path.exists(zoo_path):
-            print(f"ERROR: Model zoo path not found: {zoo_path}")
-            return None
-            
-        print(f"Model zoo path verified: {zoo_path}")
-        
-        # Check if the specific model path exists
-        specific_model_path = os.path.join(zoo_path, model_to_load)
-        if os.path.exists(specific_model_path):
-            print(f"Found model at: {specific_model_path}")
-        else:
-            print(f"WARNING: Specific model path not found: {specific_model_path}")
-            # List available models
-            try:
-                available_models = [f for f in os.listdir(zoo_path) if f.endswith(".hef") or os.path.isdir(os.path.join(zoo_path, f))]
-                print(f"Available models in {zoo_path}:")
-                for model in available_models:
-                    print(f"  - {model}")
-            except Exception as e:
-                print(f"Warning: Could not list contents of model zoo directory: {e}")
         
         # Load the model with optimized parameters
         model = dg.load_model(
-            model_name=model_to_load,
+            model_name=MODEL_NAME,
             inference_host_address="@local",
-            zoo_url=zoo_path,
+            zoo_url=MODEL_ZOO_PATH,
             output_confidence_threshold=DETECTION_THRESHOLD,
             overlay_line_width=3,  # Thicker lines for better visibility
             overlay_font_scale=1.5,  # Font scale for overlay
-            overlay_show_probabilities=True  # Show confidence scores
+            overlay_show_probabilities=True,
+            batch_size=1
         )
         
         print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
@@ -88,183 +65,28 @@ def load_model():
         return None
 
 
-def process_detections(frame, results):
-    """Process detection results and extract detections for cats and dogs."""
-    detections = []
+def process_frame(frame):
+    """Process a single frame for detection."""
+    # Convert frame to RGB for better color handling
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
-    try:
-        # Get frame dimensions for scaling
-        frame_height, frame_width = frame.shape[:2]
-        
-        # YOLO11n model sometimes returns results directly in 'results' and sometimes in 'results.results'
-        if hasattr(results, 'results') and results.results:
-            result_list = results.results
-            print(f"Processing {len(result_list)} detections from results.results")
-        elif hasattr(results, 'results') and isinstance(results.results, list):
-            result_list = results.results
-            print(f"Processing {len(result_list)} detections from results.results list")
-        elif isinstance(results, list):
-            result_list = results
-            print(f"Processing {len(result_list)} detections from direct results list")
-        else:
-            # No clear list of results found
-            result_list = []
-            if hasattr(results, '__dict__'):
-                print(f"Results attributes: {list(results.__dict__.keys())}")
-        
-        # Process detections from the result list
-        for detection in result_list:
-            try:
-                # Try multiple approaches to extract bounding box information
-                x1, y1, x2, y2, score, class_id = None, None, None, None, None, None
+    # Run inference
+    results = model.predict_batch([frame_rgb])
+    
+    # Process detections
+    for result in results:
+        for detection in result.results:
+            if detection.score >= DETECTION_THRESHOLD:
+                # Draw bounding box
+                x1, y1, x2, y2 = detection.bbox
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
                 
-                # Method 1: Direct dictionary access
-                if isinstance(detection, dict):
-                    if 'bbox' in detection:
-                        bbox = detection['bbox']
-                        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                            x1, y1, x2, y2 = map(int, bbox)
-                        
-                        score = float(detection.get('score', detection.get('confidence', 0.0)))
-                        
-                        # Get class ID depending on the model format
-                        class_id = int(detection.get('category_id', detection.get('class_id', 0)))
-                
-                # Method 2: Object attribute access
-                elif hasattr(detection, 'bbox'):
-                    bbox = detection.bbox
-                    
-                    # Handle different bbox formats
-                    if hasattr(bbox, 'x1') and hasattr(bbox, 'y1') and hasattr(bbox, 'x2') and hasattr(bbox, 'y2'):
-                        x1, y1, x2, y2 = int(bbox.x1), int(bbox.y1), int(bbox.x2), int(bbox.y2)
-                    elif hasattr(bbox, '__getitem__') and len(bbox) == 4:
-                        x1, y1, x2, y2 = map(int, bbox)
-                    
-                    # Get score and class ID
-                    if hasattr(detection, 'score'):
-                        score = float(detection.score)
-                    elif hasattr(detection, 'confidence'):
-                        score = float(detection.confidence)
-                    
-                    if hasattr(detection, 'class_id'):
-                        class_id = int(detection.class_id)
-                    elif hasattr(detection, 'category_id'):
-                        class_id = int(detection.category_id)
-                
-                # Skip invalid or incomplete detections
-                if None in (x1, y1, x2, y2, score, class_id):
-                    continue
-                
-                # Scale coordinates to match frame size
-                scale_x = frame_width / MODEL_INPUT_SIZE[0]
-                scale_y = frame_height / MODEL_INPUT_SIZE[1]
-                
-                x1 = int(x1 * scale_x)
-                y1 = int(y1 * scale_y)
-                x2 = int(x2 * scale_x)
-                y2 = int(y2 * scale_y)
-                
-                # Only process cats and dogs
-                if class_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
-                    continue
-                
-                # Add detection if it meets threshold
-                if score >= DETECTION_THRESHOLD:
-                    # Make sure coordinates are within image bounds
-                    x1 = max(0, min(frame_width-1, x1))
-                    y1 = max(0, min(frame_height-1, y1))
-                    x2 = max(0, min(frame_width-1, x2))
-                    y2 = max(0, min(frame_height-1, y2))
-                    
-                    # Only add if the box has reasonable size
-                    if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
-                        is_cat = (class_id == CAT_CLASS_ID)
-                        detections.append((x1, y1, x2, y2, score, class_id, is_cat))
-                        print(f"Added detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}, class={class_id} ({COCO_CLASSES.get(class_id, 'unknown')})")
-            
-            except Exception as e:
-                print(f"Error processing detection: {e}")
-        
-        # If we have an overlay but no detections, store the overlay for debugging
-        if len(detections) == 0 and hasattr(results, 'image_overlay') and results.image_overlay is not None:
-            print("No detections found above threshold, but overlay is available")
+                # Add label
+                label = f"{detection.class_name}: {detection.score:.2f}"
+                cv2.putText(frame, label, (int(x1), int(y1) - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
-    except Exception as e:
-        print(f"Error processing detection results: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print(f"Returning {len(detections)} processed detections")
-    return detections
-
-
-def draw_detections(frame, detections):
-    """Draw detection bounding boxes and labels on the frame."""
-    annotated_frame = frame.copy()
-    
-    # Add header with model info
-    height, width = annotated_frame.shape[:2]
-    model_text = f"Model: YOLO11n (Cats & Dogs)"
-    threshold_text = f"Threshold: {DETECTION_THRESHOLD:.2f}"
-    
-    cv2.rectangle(annotated_frame, (0, 0), (300, 70), (0, 0, 0), -1)
-    cv2.putText(annotated_frame, model_text, (10, 25), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.putText(annotated_frame, threshold_text, (10, 55),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    
-    # Draw each detection
-    for detection in detections:
-        x1, y1, x2, y2, score, class_id, is_cat = detection
-        
-        # Get class name
-        class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
-        
-        # Get color - use special color for cats and dogs
-        if is_cat:
-            color = COLORS[0]  # Green for cats
-            thickness = 3      # Thicker lines for cats
-        else:
-            color = COLORS[1]  # Red for dogs
-            thickness = 3      # Thicker lines for dogs
-        
-        # Draw bounding box
-        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
-        
-        # Add label with confidence
-        label = f"{class_name}: {score:.2f}"
-        
-        # Calculate text size to create better background
-        (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-        
-        # Draw filled rectangle for text background
-        cv2.rectangle(annotated_frame, (x1, y1-30), (x1+text_width+10, y1), color, -1)
-        
-        # Draw text
-        cv2.putText(annotated_frame, label, (x1+5, y1-5), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                    
-        # Add crosshair at center
-        center_x = (x1 + x2) // 2
-        center_y = (y1 + y2) // 2
-        cv2.drawMarker(annotated_frame, (center_x, center_y), 
-                      (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
-    
-    # Add timestamp
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    cv2.putText(annotated_frame, timestamp, (width - 250, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    
-    # Add frame counter in bottom right
-    if hasattr(draw_detections, 'frame_count'):
-        draw_detections.frame_count += 1
-    else:
-        draw_detections.frame_count = 1
-    
-    cv2.putText(annotated_frame, f"Frame: {draw_detections.frame_count}", (width - 200, height - 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    
-    return annotated_frame
+    return frame
 
 
 def process_video(input_path, output_path):
@@ -305,24 +127,11 @@ def process_video(input_path, output_path):
             if not ret:
                 break
             
-            # Resize frame for inference if needed
-            if frame.shape[:2] != MODEL_INPUT_SIZE:
-                inference_frame = cv2.resize(frame, MODEL_INPUT_SIZE)
-            else:
-                inference_frame = frame.copy()
+            # Process frame
+            processed_frame = process_frame(frame)
             
-            # Run inference
-            results_generator = model.predict_batch([inference_frame])
-            results = next(results_generator)
-            
-            # Process detections
-            detections = process_detections(frame, results)
-            
-            # Draw detections on the original frame
-            annotated_frame = draw_detections(frame, detections)
-            
-            # Write the annotated frame
-            out.write(annotated_frame)
+            # Write frame
+            out.write(processed_frame)
             
             # Display progress
             processed_frames += 1
@@ -335,7 +144,7 @@ def process_video(input_path, output_path):
             # Save a sample frame every 100 frames
             if processed_frames % 100 == 0:
                 sample_path = f"sample_frame_{processed_frames}.jpg"
-                cv2.imwrite(sample_path, annotated_frame)
+                cv2.imwrite(sample_path, processed_frame)
                 print(f"Saved sample frame to {sample_path}")
                 
     except KeyboardInterrupt:
