@@ -18,7 +18,6 @@ import degirum as dg
 MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
 MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo"
 DETECTION_THRESHOLD = 0.5
-VIDEO_PATH = "/home/pi5/Projects/hailo_cat_detector/test_videos/pi_camera_test_640x640.mp4"
 OUTPUT_PATH = "debug_output.mp4"
 
 # COCO class IDs for cats and dogs
@@ -36,6 +35,16 @@ COLORS = [
     (0, 255, 0),    # Green for cats
     (255, 0, 0)     # Red for dogs
 ]
+
+
+def get_video_path():
+    """Prompt user for video file path."""
+    while True:
+        video_path = input("Enter the path to the video file: ")
+        if os.path.exists(video_path):
+            return video_path
+        print(f"Error: File not found: {video_path}")
+        print("Please enter a valid video file path.")
 
 
 def load_model():
@@ -193,11 +202,12 @@ def process_video(input_path, output_path):
 
 def main():
     """Main function"""
-    global DETECTION_THRESHOLD  # Declare DETECTION_THRESHOLD as global
+    global DETECTION_THRESHOLD
+    
+    # Get video path from user
+    video_path = get_video_path()
     
     parser = argparse.ArgumentParser(description="Process a video file to detect cats and dogs.")
-    parser.add_argument("--input", "-i", type=str, default=VIDEO_PATH,
-                        help="Path to input video file")
     parser.add_argument("--output", "-o", type=str, default=OUTPUT_PATH,
                         help="Path to output video file")
     parser.add_argument("--threshold", "-t", type=float, default=DETECTION_THRESHOLD,
@@ -211,7 +221,7 @@ def main():
         print(f"Using custom detection threshold: {DETECTION_THRESHOLD}")
     
     # Process the video
-    success = process_video(args.input, args.output)
+    success = process_video(video_path, args.output)
     
     if success:
         print("Video processing completed successfully!")
