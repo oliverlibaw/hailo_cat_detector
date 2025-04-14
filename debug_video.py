@@ -17,7 +17,7 @@ import degirum as dg
 # Configuration
 MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
 MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo"
-DETECTION_THRESHOLD = 0.5
+DETECTION_THRESHOLD = 0.3  # Lowered threshold for better detection
 OUTPUT_PATH = "debug_output.mp4"
 
 # COCO class IDs for cats and dogs
@@ -75,10 +75,27 @@ def load_model():
         return None
 
 
+def preprocess_frame(frame):
+    """Preprocess frame for better detection."""
+    # Convert to RGB if needed
+    if len(frame.shape) == 2:  # Grayscale
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+    elif frame.shape[2] == 4:  # RGBA
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+    elif frame.shape[2] == 3:  # BGR
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Resize if needed (model expects 640x640)
+    if frame.shape[0] != 640 or frame.shape[1] != 640:
+        frame = cv2.resize(frame, (640, 640))
+    
+    return frame
+
+
 def process_frame(frame, model):
     """Process a single frame for detection."""
-    # Convert frame to RGB for better color handling
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # Preprocess frame
+    frame_rgb = preprocess_frame(frame)
     
     # Run inference
     results = model.predict_batch([frame_rgb])
@@ -153,7 +170,7 @@ def process_video(input_path, output_path):
     
     # Create output video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(output_path, fourcc, fps, (640, 640))  # Fixed output size
     
     # Process each frame
     processed_frames = 0
