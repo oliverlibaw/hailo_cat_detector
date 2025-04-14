@@ -181,7 +181,7 @@ def load_model(model_name, zoo_path):
             model_name=model_name,
             inference_host_address="@local",
             zoo_url=zoo_path,
-            image_backend="numpy",  # Use numpy backend instead of opencv
+            image_backend="opencv",  # Use opencv backend
             input_pad_method="stretch",
             input_resize_method="bilinear"
         )
