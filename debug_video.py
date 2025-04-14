@@ -91,13 +91,21 @@ def process_frame(frame, model):
     # Process detections
     for result in results:
         for detection in result.results:
-            if detection.score >= DETECTION_THRESHOLD:
+            # Access detection properties using dictionary syntax
+            score = detection['score']
+            if score >= DETECTION_THRESHOLD:
+                # Get bounding box coordinates
+                bbox = detection['bbox']
+                x1, y1, x2, y2 = bbox
+                
+                # Get class name
+                class_name = detection['class_name']
+                
                 # Draw bounding box
-                x1, y1, x2, y2 = detection.bbox
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
                 
                 # Add label
-                label = f"{detection.class_name}: {detection.score:.2f}"
+                label = f"{class_name}: {score:.2f}"
                 cv2.putText(frame, label, (int(x1), int(y1) - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     
