@@ -163,8 +163,12 @@ def preprocess_frame(frame, target_shape=(640, 640)):
     # Ensure the image is in uint8 format (0-255 range)
     normalized = resized.astype(np.uint8)
     
-    # Add batch dimension
+    # Add batch dimension and ensure correct shape
     batched = np.expand_dims(normalized, axis=0)
+    
+    # Ensure the shape matches exactly what the model expects
+    if batched.shape != (1, 640, 640, 3):
+        raise ValueError(f"Invalid shape: {batched.shape}. Expected (1, 640, 640, 3)")
     
     return batched
 
@@ -181,9 +185,7 @@ def load_model(model_name, zoo_path):
             model_name=model_name,
             inference_host_address="@local",
             zoo_url=zoo_path,
-            image_backend="opencv",  # Use opencv backend
-            input_pad_method="stretch",
-            input_resize_method="bilinear"
+            image_backend="opencv"
         )
 
         # Print model information
@@ -228,25 +230,27 @@ def load_model(model_name, zoo_path):
         print(f"Failed to load model: {str(e)}")
         return None
 
-
 def process_frame(frame, model, detection_threshold, show_all=False):
     """Process a single frame through the model."""
-    # Preprocess the frame
-    preprocessed = preprocess_frame(frame)
-    
-    # Run inference
-    results = list(model.predict_batch([preprocessed]))[0]
-    
-    # Process detections
-    detections = []
-    for detection in results.results:
-        if 'bbox' in detection and 'score' in detection:
-            if detection['score'] >= detection_threshold:
-                if show_all or detection.get('category_id') in TARGET_CLASS_IDS:
-                    detections.append(detection)
-    
-    return detections
-
+    try:
+        # Preprocess the frame
+        preprocessed = preprocess_frame(frame)
+        
+        # Run inference
+        results = list(model.predict_batch([preprocessed]))[0]
+        
+        # Process detections
+        detections = []
+        for detection in results.results:
+            if 'bbox' in detection and 'score' in detection:
+                if detection['score'] >= detection_threshold:
+                    if show_all or detection.get('category_id') in TARGET_CLASS_IDS:
+                        detections.append(detection)
+        
+        return detections
+    except Exception as e:
+        print(f"Error processing frame: {str(e)}")
+        return []
 
 def process_video(input_path, output_path, model, threshold, show_all):
     """Process a video file frame by frame."""
