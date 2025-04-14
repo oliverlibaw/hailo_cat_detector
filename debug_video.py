@@ -67,14 +67,17 @@ def load_model():
         
         # Print model information
         print("\nModel Information:")
-        print(f"Model name: {model.name}")
-        print(f"Model path: {model.path}")
-        print(f"Input shape: {model.input_shape}")
-        print(f"Output shape: {model.output_shape}")
-        print()
+        print(f"Model name: {MODEL_NAME}")
+        print(f"Model zoo path: {MODEL_ZOO_PATH}")
+        
+        # Get model properties
+        properties = model.properties
+        print("\nModel Properties:")
+        for key, value in properties.items():
+            print(f"{key}: {value}")
         
         # Run a test inference to get class information
-        print("Running test inference to get class information...")
+        print("\nRunning test inference to get class information...")
         test_frame = np.zeros((640, 640, 3), dtype=np.uint8)
         results = model.predict_batch([test_frame])
         
