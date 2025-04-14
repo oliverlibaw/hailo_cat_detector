@@ -27,7 +27,6 @@ CAMERA_SETTINGS = {
     "AeMeteringMode": 0,  # Center-weighted metering
     "ExposureTime": 0,  # Let auto-exposure handle it
     "AnalogueGain": 1.0,  # Let auto-gain handle it
-    "ColourGains": (1.0, 1.0),  # Let auto-white balance handle it
     "Brightness": 0.0,  # Default brightness
     "Contrast": 1.0,  # Default contrast
     "Saturation": 1.0,  # Default saturation
