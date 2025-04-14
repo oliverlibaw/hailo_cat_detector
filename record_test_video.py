@@ -64,10 +64,7 @@ def record_test_video(output_path, duration):
         # Setup output with efficient codec settings
         output = FfmpegOutput(
             output_path,
-            audio=False,  # No audio needed
-            vcodec='libx264',  # Use x264 codec
-            preset='faster',  # Faster encoding for lower latency
-            tune='zerolatency'  # Optimize for low latency
+            audio=False  # No audio needed
         )
 
         print(f"\nStarting recording to {output_path} for {duration} seconds...")
