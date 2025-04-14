@@ -65,6 +65,12 @@ def load_model():
             zoo_url=MODEL_ZOO_PATH
         )
         
+        # Print available classes from the model
+        print("\nAvailable classes in the model:")
+        for class_id, class_name in model.classes.items():
+            print(f"ID: {class_id}, Name: {class_name}")
+        print()
+        
         print(f"Model loaded successfully")
         return model
         
@@ -109,32 +115,31 @@ def process_frame(frame, model):
                 category_id = detection['category_id']
                 label = detection['label']
                 
-                # Print all detection info for debugging
+                # Print ALL detections for debugging, regardless of confidence
                 print(f"Detection: {label} (ID: {category_id}) with confidence {score:.2f}")
                 
                 # Only process cats and dogs
                 if category_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
                     continue
                 
-                if score >= DETECTION_THRESHOLD:
-                    # Get bounding box coordinates
-                    bbox = detection['bbox']
-                    x1, y1, x2, y2 = bbox
-                    
-                    # Get color based on class
-                    color = COLORS[0] if category_id == CAT_CLASS_ID else COLORS[1]
-                    
-                    # Draw bounding box
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                    
-                    # Add label with confidence score
-                    label_text = f"{label}: {score:.2f}"
-                    cv2.putText(frame, label_text, (int(x1), int(y1) - 10),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                    
-                    # Print detection info for debugging
-                    print(f"Detected {label} with confidence {score:.2f} at [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}]")
-                    
+                # Draw bounding box regardless of confidence for cats and dogs
+                bbox = detection['bbox']
+                x1, y1, x2, y2 = bbox
+                
+                # Get color based on class
+                color = COLORS[0] if category_id == CAT_CLASS_ID else COLORS[1]
+                
+                # Draw bounding box
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                
+                # Add label with confidence score
+                label_text = f"{label}: {score:.2f}"
+                cv2.putText(frame, label_text, (int(x1), int(y1) - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # Print detection info for debugging
+                print(f"Detected {label} with confidence {score:.2f} at [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}]")
+                
             except KeyError as e:
                 print(f"Warning: Missing key in detection: {e}")
                 print("Detection structure:", detection)
@@ -229,6 +234,8 @@ def main():
                         help="Path to output video file")
     parser.add_argument("--threshold", "-t", type=float, default=DETECTION_THRESHOLD,
                         help=f"Detection threshold (default: {DETECTION_THRESHOLD})")
+    parser.add_argument("--debug", "-d", action="store_true",
+                        help="Show all detections regardless of confidence")
     
     args = parser.parse_args()
     
