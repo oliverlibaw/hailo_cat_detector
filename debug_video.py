@@ -80,10 +80,14 @@ def process_frame(frame, model):
             try:
                 # Access detection properties
                 score = detection['score']
-                class_id = detection['class_id']
+                category_id = detection['category_id']
+                label = detection['label']
+                
+                # Print all detection info for debugging
+                print(f"Detection: {label} (ID: {category_id}) with confidence {score:.2f}")
                 
                 # Only process cats and dogs
-                if class_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
+                if category_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
                     continue
                 
                 if score >= DETECTION_THRESHOLD:
@@ -91,22 +95,19 @@ def process_frame(frame, model):
                     bbox = detection['bbox']
                     x1, y1, x2, y2 = bbox
                     
-                    # Get class name
-                    class_name = COCO_CLASSES[class_id]
-                    
                     # Get color based on class
-                    color = COLORS[0] if class_id == CAT_CLASS_ID else COLORS[1]
+                    color = COLORS[0] if category_id == CAT_CLASS_ID else COLORS[1]
                     
                     # Draw bounding box
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
                     
                     # Add label with confidence score
-                    label = f"{class_name}: {score:.2f}"
-                    cv2.putText(frame, label, (int(x1), int(y1) - 10),
+                    label_text = f"{label}: {score:.2f}"
+                    cv2.putText(frame, label_text, (int(x1), int(y1) - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                     
                     # Print detection info for debugging
-                    print(f"Detected {class_name} with confidence {score:.2f} at [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}]")
+                    print(f"Detected {label} with confidence {score:.2f} at [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}]")
                     
             except KeyError as e:
                 print(f"Warning: Missing key in detection: {e}")
