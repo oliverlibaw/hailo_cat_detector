@@ -13,7 +13,7 @@ import time
 import numpy as np
 import argparse
 
-# Configuration
+# Configuration TEST
 MODEL_INPUT_SIZE = (640, 640)  # YOLO11n model input size
 DETECTION_THRESHOLD = 0.5  # Increased threshold for better accuracy
 MODEL_TO_LOAD = "yolov11n_coco"  # Using YOLOv11n model
@@ -359,7 +359,7 @@ def main():
     global DETECTION_THRESHOLD  # Move global declaration to beginning of function
     
     parser = argparse.ArgumentParser(description="Process a video file to detect cats.")
-    parser.add_argument("--input", "-i", type=str, default="/home/pi5/Downloads/cat_test2_640x640.mp4",
+    parser.add_argument("--input", "-i", type=str, default="/home/pi5/Projects/hailo_cat_detector/test_videos/pi_camera_test_640x640.mp4",
                         help="Path to input video file")
     parser.add_argument("--output", "-o", type=str, default="debug_output.mp4",
                         help="Path to output video file")
