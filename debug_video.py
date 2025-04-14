@@ -90,24 +90,37 @@ def process_frame(frame, model):
     
     # Process detections
     for result in results:
+        # Print the structure of the first detection for debugging
+        if result.results and len(result.results) > 0:
+            print("First detection structure:", result.results[0])
+        
         for detection in result.results:
-            # Access detection properties using dictionary syntax
-            score = detection['score']
-            if score >= DETECTION_THRESHOLD:
-                # Get bounding box coordinates
-                bbox = detection['bbox']
-                x1, y1, x2, y2 = bbox
-                
-                # Get class name
-                class_name = detection['class_name']
-                
-                # Draw bounding box
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                
-                # Add label
-                label = f"{class_name}: {score:.2f}"
-                cv2.putText(frame, label, (int(x1), int(y1) - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            try:
+                # Access detection properties using dictionary syntax
+                score = detection['score']
+                if score >= DETECTION_THRESHOLD:
+                    # Get bounding box coordinates
+                    bbox = detection['bbox']
+                    x1, y1, x2, y2 = bbox
+                    
+                    # Get class ID and map to class name
+                    class_id = detection['class_id']
+                    class_name = COCO_CLASSES.get(class_id, f"class_{class_id}")
+                    
+                    # Get color based on class
+                    color = COLORS[0] if class_id == CAT_CLASS_ID else COLORS[1]
+                    
+                    # Draw bounding box
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                    
+                    # Add label
+                    label = f"{class_name}: {score:.2f}"
+                    cv2.putText(frame, label, (int(x1), int(y1) - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            except KeyError as e:
+                print(f"Warning: Missing key in detection: {e}")
+                print("Detection structure:", detection)
+                continue
     
     return frame
 
