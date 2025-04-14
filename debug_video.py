@@ -59,7 +59,7 @@ def load_model():
         except Exception as e:
             print(f"Warning: Could not list contents of model zoo directory: {e}")
         
-        # Load the model with optimized parameters
+        # Load the model with supported parameters
         model = dg.load_model(
             model_name=MODEL_NAME,
             inference_host_address="@local",
@@ -67,8 +67,7 @@ def load_model():
             output_confidence_threshold=DETECTION_THRESHOLD,
             overlay_line_width=3,
             overlay_font_scale=1.5,
-            overlay_show_probabilities=True,
-            batch_size=1
+            overlay_show_probabilities=True
         )
         
         print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
