@@ -65,11 +65,24 @@ def load_model():
             zoo_url=MODEL_ZOO_PATH
         )
         
-        # Print available classes from the model
-        print("\nAvailable classes in the model:")
-        for class_id, class_name in model.classes.items():
-            print(f"ID: {class_id}, Name: {class_name}")
+        # Print model information
+        print("\nModel Information:")
+        print(f"Model name: {model.name}")
+        print(f"Model path: {model.path}")
+        print(f"Input shape: {model.input_shape}")
+        print(f"Output shape: {model.output_shape}")
         print()
+        
+        # Run a test inference to get class information
+        print("Running test inference to get class information...")
+        test_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+        results = model.predict_batch([test_frame])
+        
+        # Print first detection to see structure
+        if results and results[0].results:
+            print("\nSample detection structure:")
+            print(results[0].results[0])
+            print()
         
         print(f"Model loaded successfully")
         return model
@@ -117,6 +130,9 @@ def process_frame(frame, model):
                 
                 # Print ALL detections for debugging, regardless of confidence
                 print(f"Detection: {label} (ID: {category_id}) with confidence {score:.2f}")
+                
+                # Print full detection structure for debugging
+                print("Full detection structure:", detection)
                 
                 # Only process cats and dogs
                 if category_id not in [CAT_CLASS_ID, DOG_CLASS_ID]:
