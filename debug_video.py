@@ -43,14 +43,30 @@ def load_model():
         print(f"Loading YOLO11s model: {MODEL_NAME}")
         import degirum as dg
         
+        # Check if model zoo path exists
+        if not os.path.exists(MODEL_ZOO_PATH):
+            print(f"ERROR: Model zoo path not found: {MODEL_ZOO_PATH}")
+            print("Please make sure the ModelZoo directory exists and contains the model files.")
+            return None
+        
+        # List available models for debugging
+        try:
+            available_models = [f for f in os.listdir(MODEL_ZOO_PATH) 
+                              if f.endswith(".hef") or os.path.isdir(os.path.join(MODEL_ZOO_PATH, f))]
+            print(f"Available models in {MODEL_ZOO_PATH}:")
+            for model in available_models:
+                print(f"  - {model}")
+        except Exception as e:
+            print(f"Warning: Could not list contents of model zoo directory: {e}")
+        
         # Load the model with optimized parameters
         model = dg.load_model(
             model_name=MODEL_NAME,
             inference_host_address="@local",
             zoo_url=MODEL_ZOO_PATH,
             output_confidence_threshold=DETECTION_THRESHOLD,
-            overlay_line_width=3,  # Thicker lines for better visibility
-            overlay_font_scale=1.5,  # Font scale for overlay
+            overlay_line_width=3,
+            overlay_font_scale=1.5,
             overlay_show_probabilities=True,
             batch_size=1
         )
