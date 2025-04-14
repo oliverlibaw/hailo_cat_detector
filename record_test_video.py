@@ -58,8 +58,7 @@ def record_test_video(output_path, duration):
 
         # Setup encoder with balanced quality settings
         encoder = H264Encoder(
-            bitrate=2000000,  # 2 Mbps is sufficient for 640x640
-            quality=Quality.MEDIUM  # Set quality in encoder
+            bitrate=2000000  # 2 Mbps is sufficient for 640x640
         )
         
         # Setup output with efficient codec settings
