@@ -151,16 +151,51 @@ def load_model(model_name, zoo_path):
             print(f"ERROR: Model zoo path not found: {zoo_path}")
             return None
 
+        # Load the model
         model = dg.load_model(
             model_name=model_name,
-            inference_host_address="@local", # Assumes Hailo connected locally
+            inference_host_address="@local",
             zoo_url=zoo_path
         )
+
+        # Print model information
+        print("\nModel Information:")
+        print(f"Model name: {model_name}")
+        print(f"Model zoo path: {zoo_path}")
+        
+        # Get model input shape and format
+        input_shape = model.input_shape[0]  # Get first input shape (batch, height, width, channels)
+        print(f"Model input shape: {input_shape}")
+        
+        # Run a test inference to verify model works
+        print("\nRunning test inference...")
+        test_frame = np.zeros((input_shape[1], input_shape[2], input_shape[3]), dtype=np.uint8)
+        test_batch = np.expand_dims(test_frame, axis=0)  # Add batch dimension
+        
+        # Run inference and collect results
+        results = list(model.predict_batch([test_batch]))  # Convert generator to list
+        
+        if results and results[0].results:
+            print("\nSample detection structure:")
+            print(results[0].results[0])
+            print()
+            
+            # Print available classes from the first result
+            seen_classes = set()
+            for detection in results[0].results:
+                if 'label' in detection:
+                    seen_classes.add(detection['label'])
+            
+            print("Available classes in detections:")
+            for class_name in sorted(seen_classes):
+                print(f"- {class_name}")
+            print()
+        else:
+            print("Warning: No detections in test inference")
+        
         print("Model loaded successfully.")
-        print(f"Model expected input shape: {model.input_shape}")
-        print(f"Model expected input format: {model.input_type}") # e.g., ImageFormat.RGB
-        print(f"Model output details: {model.output_type}") # Info about outputs
         return model
+        
     except Exception as e:
         print(f"Failed to load model: {str(e)}")
         import traceback
@@ -199,56 +234,45 @@ def process_frame(frame, model, detection_threshold, show_all=False):
     input_batch = np.expand_dims(letterboxed_frame_rgb, axis=0)
 
     # 2. Run Inference
-    # predict_batch expects a list of inputs
-    results = model.predict_batch([input_batch])
+    results = list(model.predict_batch([input_batch]))  # Convert generator to list
 
-    # Process detections from the first (and only) result in the batch
+    # Process detections
     detections = []
     if results and results[0].results:
         detections = results[0].results
-        # Optional: Print raw detections for debugging structure
-        # print("Raw Detections:")
-        # pprint(detections)
     else:
-        # No detections in this frame
-        return original_frame_bgr # Return original frame without boxes
+        return original_frame_bgr
 
-
-    # 3. Filter Detections (based on score and optionally class)
+    # 3. Filter Detections
     filtered_detections = []
     for det in detections:
         try:
             score = det['score']
             category_id = det['category_id']
+            label = det['label']
 
-            # Apply threshold
+            # Print all detections for debugging
+            print(f"Detection: {label} (ID: {category_id}) with confidence {score:.2f}")
+
             if score >= detection_threshold:
-                # Check if it's a target class OR if we should show all
                 if category_id in TARGET_CLASS_IDS or show_all:
                     filtered_detections.append(det)
-                # Optionally print skipped detections
-                # else:
-                #    print(f"Skipping non-target class {det['label']} (ID: {category_id}) Score: {score:.2f}")
-            # Optionally print low-confidence detections
-            # else:
-            #    print(f"Skipping low confidence {det['label']} (ID: {category_id}) Score: {score:.2f}")
-
         except KeyError as e:
             print(f"Warning: Missing key {e} in detection: {det}")
             continue
 
     if not filtered_detections:
-        return original_frame_bgr # Return original if no detections pass filters
+        return original_frame_bgr
 
     # 4. Rescale Bounding Boxes
     rescaled_detections = reverse_rescale_bboxes(
         filtered_detections, scale, pad_top, pad_left, original_shape
     )
 
-    # 5. Draw Bounding Boxes on Original Frame
+    # 5. Draw Bounding Boxes
     for det in rescaled_detections:
         try:
-            bbox = det['bbox'] # Already rescaled and rounded to int
+            bbox = det['bbox']
             label = det['label']
             score = det['score']
             category_id = det['category_id']
@@ -256,20 +280,18 @@ def process_frame(frame, model, detection_threshold, show_all=False):
             x1, y1, x2, y2 = bbox
 
             # Get color based on class ID
-            color = COLORS.get(category_id, DEFAULT_COLOR) # Use default for non-target classes if show_all=True
+            color = COLORS.get(category_id, DEFAULT_COLOR)
 
             # Draw rectangle
             cv2.rectangle(original_frame_bgr, (x1, y1), (x2, y2), color, 2)
 
-            # Prepare and draw label text
+            # Draw label
             label_text = f"{label}: {score:.2f}"
-            # Position text above the box, adjusting if it goes off-screen
             text_y = y1 - 10 if y1 > 20 else y1 + 15
             cv2.putText(original_frame_bgr, label_text, (x1, text_y),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-            # Print detection info for debugging
-            print(f"Drawn: {label} (ID: {category_id}, Score: {score:.2f}) @ Orig Coords: [{x1}, {y1}, {x2}, {y2}]")
+            print(f"Drawn: {label} (ID: {category_id}, Score: {score:.2f}) @ [{x1}, {y1}, {x2}, {y2}]")
 
         except KeyError as e:
             print(f"Warning: Missing key {e} drawing detection: {det}")
@@ -280,7 +302,7 @@ def process_frame(frame, model, detection_threshold, show_all=False):
             traceback.print_exc()
             continue
 
-    return original_frame_bgr # Return the frame with drawings
+    return original_frame_bgr
 
 
 def process_video(input_path, output_path, model, threshold, show_all):
