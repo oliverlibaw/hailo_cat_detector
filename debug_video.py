@@ -160,8 +160,8 @@ def preprocess_frame(frame, target_shape=(640, 640)):
     # Resize to target shape
     resized = cv2.resize(frame_rgb, target_shape, interpolation=cv2.INTER_LINEAR)
     
-    # Normalize to [0, 1] range
-    normalized = resized.astype(np.float32) / 255.0
+    # Convert to uint8 (0-255 range)
+    normalized = resized.astype(np.uint8)
     
     # Add batch dimension
     batched = np.expand_dims(normalized, axis=0)
