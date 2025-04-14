@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Simple script to record a 60-second test video using the Raspberry Pi camera.
+Optimized for object detection performance while maintaining good quality.
 """
 
 import time
@@ -11,65 +12,102 @@ from picamera2.outputs import FfmpegOutput
 
 # --- Configuration ---
 VIDEO_DURATION = 60  # Duration in seconds
-# Consider using a resolution native to your camera for potentially better quality,
-# e.g., (1920, 1080), and let the detection script handle letterboxing.
-# Keeping 640x640 as per the previous script for consistency.
+# Use 640x640 resolution to match YOLO model input size
 VIDEO_WIDTH = 640
 VIDEO_HEIGHT = 640
 VIDEO_FPS = 30
 OUTPUT_DIR = "test_videos"  # Directory to save videos
-# You can customize the filename, e.g., add a timestamp
-# OUTPUT_FILENAME = f"pi_test_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
 OUTPUT_FILENAME = f"pi_camera_test_{VIDEO_WIDTH}x{VIDEO_HEIGHT}_{VIDEO_DURATION}s.mp4"
-# --- End Configuration ---
+
+# Camera settings optimized for detection
+CAMERA_SETTINGS = {
+    "AeEnable": True,  # Auto exposure
+    "AwbEnable": True,  # Auto white balance
+    "AeExposureMode": 0,  # Normal exposure mode
+    "AeMeteringMode": 0,  # Center-weighted metering
+    "ExposureTime": 0,  # Let auto-exposure handle it
+    "AnalogueGain": 1.0,  # Let auto-gain handle it
+    "ColourGains": (1.0, 1.0),  # Let auto-white balance handle it
+    "Brightness": 0.0,  # Default brightness
+    "Contrast": 1.0,  # Default contrast
+    "Saturation": 1.0,  # Default saturation
+    "FrameRate": VIDEO_FPS  # Set desired frame rate
+}
 
 def record_test_video(output_path, duration):
     """Initializes camera, records video for specified duration, and saves it."""
     print("Initializing camera...")
     picam2 = Picamera2()
 
-    # Simplified video configuration - relying more on defaults
-    video_config = picam2.create_video_configuration(
-        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "XBGR8888"},
-        controls={"FrameRate": VIDEO_FPS} # Set desired frame rate
-    )
-    picam2.configure(video_config)
-    print(f"Configured for {VIDEO_WIDTH}x{VIDEO_HEIGHT} @ {VIDEO_FPS} FPS.")
-
-    # Setup encoder and output
-    # Using quality-based encoding is generally preferred over fixed bitrate
-    encoder = H264Encoder(quality=Quality.HIGH) # Options: VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH
-    output = FfmpegOutput(output_path) # Saves to MP4 using ffmpeg
-
-    print(f"Starting recording to {output_path} for {duration} seconds...")
-    print("Press Ctrl+C to stop recording early.")
-
     try:
-        # Start recording using the simplified method
+        # Configure video with detection-optimized settings
+        video_config = picam2.create_video_configuration(
+            main={
+                "size": (VIDEO_WIDTH, VIDEO_HEIGHT),
+                "format": "XBGR8888"  # Use XBGR for better color handling
+            },
+            controls=CAMERA_SETTINGS
+        )
+        
+        # Apply the configuration
+        picam2.configure(video_config)
+        print(f"Configured for {VIDEO_WIDTH}x{VIDEO_HEIGHT} @ {VIDEO_FPS} FPS")
+        print("Camera settings:")
+        for setting, value in CAMERA_SETTINGS.items():
+            print(f"  {setting}: {value}")
+
+        # Setup encoder with balanced quality settings
+        encoder = H264Encoder(
+            quality=Quality.MEDIUM,  # Balanced quality
+            bitrate=2000000  # 2 Mbps is sufficient for 640x640
+        )
+        
+        # Setup output with efficient codec settings
+        output = FfmpegOutput(
+            output_path,
+            audio=False,  # No audio needed
+            vcodec='libx264',  # Use x264 codec
+            preset='faster',  # Faster encoding for lower latency
+            tune='zerolatency'  # Optimize for low latency
+        )
+
+        print(f"\nStarting recording to {output_path} for {duration} seconds...")
+        print("Press Ctrl+C to stop recording early.")
+
+        # Start recording
         picam2.start_recording(encoder, output)
 
-        # Wait for the specified duration while keeping the script alive
-        # (start_recording runs in a background thread)
-        time.sleep(duration)
+        # Wait for the specified duration
+        start_time = time.time()
+        while time.time() - start_time < duration:
+            time.sleep(0.1)  # Check more frequently for smoother interruption
+            elapsed = time.time() - start_time
+            if elapsed % 5 == 0:  # Print progress every 5 seconds
+                print(f"Recording... {elapsed:.1f}/{duration} seconds")
 
         # Stop recording
         picam2.stop_recording()
-        print("Recording stopped.")
+        print("\nRecording completed successfully.")
 
     except KeyboardInterrupt:
         print("\nRecording stopped early by user.")
-        # Ensure recording stops if interrupted
         picam2.stop_recording()
     except Exception as e:
-        print(f"An error occurred during recording: {e}")
+        print(f"\nAn error occurred during recording: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         # Close the camera connection
         picam2.close()
         print("Camera closed.")
+        
+        # Verify the output file
         if os.path.exists(output_path):
-             print(f"Video saved successfully to: {output_path}")
+            file_size = os.path.getsize(output_path) / (1024 * 1024)  # Size in MB
+            print(f"Video saved successfully to: {output_path}")
+            print(f"File size: {file_size:.1f} MB")
         else:
-             print(f"Failed to save video to {output_path}")
+            print(f"Failed to save video to {output_path}")
 
 
 if __name__ == "__main__":
