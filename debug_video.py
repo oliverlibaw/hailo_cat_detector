@@ -143,6 +143,31 @@ def get_video_path():
         print(f"Error: File not found: {video_path}")
         print("Please enter a valid video file path.")
 
+def preprocess_frame(frame, target_shape=(640, 640)):
+    """
+    Preprocess frame for model input according to DeGirum requirements.
+    
+    Parameters:
+        frame (ndarray): Input frame in BGR format
+        target_shape (tuple): Target (height, width)
+        
+    Returns:
+        preprocessed_frame (ndarray): Preprocessed frame ready for model input
+    """
+    # Convert BGR to RGB
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # Resize to target shape
+    resized = cv2.resize(frame_rgb, target_shape, interpolation=cv2.INTER_LINEAR)
+    
+    # Normalize to [0, 1] range
+    normalized = resized.astype(np.float32) / 255.0
+    
+    # Add batch dimension
+    batched = np.expand_dims(normalized, axis=0)
+    
+    return batched
+
 def load_model(model_name, zoo_path):
     """Load the specified Degirum model."""
     try:
@@ -170,7 +195,7 @@ def load_model(model_name, zoo_path):
         # Run a test inference to verify model works
         print("\nRunning test inference...")
         test_frame = np.zeros((input_shape[1], input_shape[2], input_shape[3]), dtype=np.uint8)
-        test_batch = np.expand_dims(test_frame, axis=0)  # Add batch dimension
+        test_batch = preprocess_frame(test_frame)  # Use the new preprocessing function
         
         # Run inference and collect results
         results = list(model.predict_batch([test_batch]))  # Convert generator to list
@@ -198,111 +223,26 @@ def load_model(model_name, zoo_path):
         
     except Exception as e:
         print(f"Failed to load model: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return None
 
 
 def process_frame(frame, model, detection_threshold, show_all=False):
-    """
-    Preprocesses a frame, runs inference, filters/scales detections, and draws results.
-
-    Parameters:
-        frame (ndarray): Input video frame (BGR format from OpenCV).
-        model: Loaded Degirum model object.
-        detection_threshold (float): Confidence threshold for filtering detections.
-        show_all (bool): If True, draw boxes for all classes above threshold, not just cats/dogs.
-
-    Returns:
-        frame (ndarray): Frame with bounding boxes and labels drawn (BGR format).
-    """
-    original_shape = frame.shape[:2] # (height, width)
-    original_frame_bgr = frame # Keep original BGR frame for drawing
-
-    # 1. Preprocess Frame
-    # Convert BGR to RGB
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    # Apply letterboxing
-    # Assuming model input shape is like (1, H, W, 3) -> use (H, W)
-    target_h, target_w = model.input_shape[0][1], model.input_shape[0][2]
-    letterboxed_frame_rgb, scale, pad_top, pad_left = resize_with_letterbox(
-        frame_rgb, target_shape=(target_h, target_w)
-    )
-
-    # Add batch dimension -> (1, H, W, 3)
-    input_batch = np.expand_dims(letterboxed_frame_rgb, axis=0)
-
-    # 2. Run Inference
-    results = list(model.predict_batch([input_batch]))  # Convert generator to list
-
+    """Process a single frame through the model."""
+    # Preprocess the frame
+    preprocessed = preprocess_frame(frame)
+    
+    # Run inference
+    results = list(model.predict_batch([preprocessed]))[0]
+    
     # Process detections
     detections = []
-    if results and results[0].results:
-        detections = results[0].results
-    else:
-        return original_frame_bgr
-
-    # 3. Filter Detections
-    filtered_detections = []
-    for det in detections:
-        try:
-            score = det['score']
-            category_id = det['category_id']
-            label = det['label']
-
-            # Print all detections for debugging
-            print(f"Detection: {label} (ID: {category_id}) with confidence {score:.2f}")
-
-            if score >= detection_threshold:
-                if category_id in TARGET_CLASS_IDS or show_all:
-                    filtered_detections.append(det)
-        except KeyError as e:
-            print(f"Warning: Missing key {e} in detection: {det}")
-            continue
-
-    if not filtered_detections:
-        return original_frame_bgr
-
-    # 4. Rescale Bounding Boxes
-    rescaled_detections = reverse_rescale_bboxes(
-        filtered_detections, scale, pad_top, pad_left, original_shape
-    )
-
-    # 5. Draw Bounding Boxes
-    for det in rescaled_detections:
-        try:
-            bbox = det['bbox']
-            label = det['label']
-            score = det['score']
-            category_id = det['category_id']
-
-            x1, y1, x2, y2 = bbox
-
-            # Get color based on class ID
-            color = COLORS.get(category_id, DEFAULT_COLOR)
-
-            # Draw rectangle
-            cv2.rectangle(original_frame_bgr, (x1, y1), (x2, y2), color, 2)
-
-            # Draw label
-            label_text = f"{label}: {score:.2f}"
-            text_y = y1 - 10 if y1 > 20 else y1 + 15
-            cv2.putText(original_frame_bgr, label_text, (x1, text_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-            print(f"Drawn: {label} (ID: {category_id}, Score: {score:.2f}) @ [{x1}, {y1}, {x2}, {y2}]")
-
-        except KeyError as e:
-            print(f"Warning: Missing key {e} drawing detection: {det}")
-            continue
-        except Exception as e:
-            print(f"Error drawing detection: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
-
-    return original_frame_bgr
+    for detection in results.results:
+        if 'bbox' in detection and 'score' in detection:
+            if detection['score'] >= detection_threshold:
+                if show_all or detection.get('category_id') in TARGET_CLASS_IDS:
+                    detections.append(detection)
+    
+    return detections
 
 
 def process_video(input_path, output_path, model, threshold, show_all):
