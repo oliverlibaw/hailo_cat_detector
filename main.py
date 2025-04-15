@@ -10,6 +10,7 @@ from ultralytics import YOLO
 import pygame
 import signal
 import sys
+import datetime
 
 # Development mode flag - set to True when developing on MacBook
 DEV_MODE = False  # Set to False for Raspberry Pi deployment
@@ -70,6 +71,14 @@ VERBOSE_OUTPUT = False  # Reduce console output
 SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
 SAVE_INTERVAL = 30  # Only save every 30th frame with detections to improve performance
 MAX_SAVED_FRAMES = 20  # Maximum number of frames to keep before overwriting old ones
+
+# Video recording configuration
+RECORD_VIDEO = True  # Enable video recording
+VIDEO_OUTPUT_DIR = "recordings"  # Directory to save videos
+VIDEO_MAX_LENGTH = 600  # Maximum video length in seconds (10 minutes)
+VIDEO_CODEC = cv2.VideoWriter_fourcc(*'mp4v')  # Use MP4 codec
+VIDEO_FPS = 15  # FPS for the recorded video
+VIDEO_RESOLUTION = (640, 640)  # Resolution for the recorded video
 
 # Optimized camera settings for better detection in varying light conditions
 CAMERA_SETTINGS = {
@@ -885,6 +894,88 @@ def cleanup_old_frames():
         if DEBUG_MODE:
             print(f"Error cleaning up old frames: {e}")
 
+def init_video_writer():
+    """Initialize video writer for recording"""
+    if not RECORD_VIDEO:
+        return None
+        
+    try:
+        # Create output directory if it doesn't exist
+        if not os.path.exists(VIDEO_OUTPUT_DIR):
+            os.makedirs(VIDEO_OUTPUT_DIR)
+            print(f"Created video output directory: {VIDEO_OUTPUT_DIR}")
+        
+        # Generate filename with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        video_filename = os.path.join(VIDEO_OUTPUT_DIR, f"cat_detector_{timestamp}.mp4")
+        
+        # Create video writer
+        video_writer = cv2.VideoWriter(
+            video_filename, 
+            VIDEO_CODEC, 
+            VIDEO_FPS, 
+            VIDEO_RESOLUTION
+        )
+        
+        if not video_writer.isOpened():
+            print(f"Error: Could not open video writer. Check codec and path: {video_filename}")
+            return None
+            
+        print(f"Video recording initialized: {video_filename}")
+        return video_writer
+    except Exception as e:
+        print(f"Error initializing video writer: {e}")
+        return None
+
+def cleanup_video_writer(video_writer):
+    """Clean up video writer"""
+    if video_writer is not None:
+        try:
+            video_writer.release()
+            print("Video writer released")
+        except Exception as e:
+            print(f"Error releasing video writer: {e}")
+
+def create_new_video_writer(video_writer):
+    """Create a new video writer when the current video reaches max length"""
+    # First close the current writer
+    if video_writer is not None:
+        cleanup_video_writer(video_writer)
+    
+    # Then create a new one
+    return init_video_writer()
+
+def draw_relay_status(frame, active_relays):
+    """Draw relay status indicators on the frame"""
+    height, width = frame.shape[:2]
+    
+    # Draw relay status in top-right corner
+    cv2.rectangle(frame, (width - 180, 80), (width, 200), (0, 0, 0), -1)
+    
+    y_offset = 100
+    
+    # Draw center/squirt relay status
+    center_status = "SQUIRT: ON" if active_relays.get('center', False) else "SQUIRT: OFF"
+    color = (0, 255, 0) if active_relays.get('center', False) else (0, 0, 255)
+    cv2.putText(frame, center_status, (width - 170, y_offset), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    
+    # Draw left relay status
+    y_offset += 30
+    left_status = "LEFT: ON" if active_relays.get('left', False) else "LEFT: OFF"
+    color = (0, 255, 0) if active_relays.get('left', False) else (0, 0, 255)
+    cv2.putText(frame, left_status, (width - 170, y_offset), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    
+    # Draw right relay status
+    y_offset += 30
+    right_status = "RIGHT: ON" if active_relays.get('right', False) else "RIGHT: OFF"
+    color = (0, 255, 0) if active_relays.get('right', False) else (0, 0, 255)
+    cv2.putText(frame, right_status, (width - 170, y_offset), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    
+    return frame
+
 def process_actions(frame, detections, fps):
     """Process detections and take appropriate actions"""
     frame_width = frame.shape[1]
@@ -920,6 +1011,13 @@ def process_actions(frame, detections, fps):
     cv2.putText(annotated_frame, threshold_text, (width - 240, 55), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     
+    # Track active relays for display
+    active_relays = {
+        'center': False,
+        'left': False,
+        'right': False
+    }
+    
     # Frame counter for limiting saved images
     frame_counter = int(time.time()) % SAVE_INTERVAL
     
@@ -948,15 +1046,18 @@ def process_actions(frame, detections, fps):
         # Set relay states based on object position
         if not DEV_MODE:
             # Always activate center relay for any detection
+            active_relays['center'] = True
             set_relay(RELAY_PINS['center'], True)
             
             if relative_position < -CENTER_THRESHOLD:
                 # Object is on the left side
+                active_relays['left'] = True
                 if DEBUG_MODE and set_relay(RELAY_PIN_LEFT, True):
                     print("Cat on LEFT side - activating LEFT relay")
                 set_relay(RELAY_PIN_RIGHT, False)
             elif relative_position > CENTER_THRESHOLD:
                 # Object is on the right side
+                active_relays['right'] = True
                 set_relay(RELAY_PIN_LEFT, False)
                 if DEBUG_MODE and set_relay(RELAY_PIN_RIGHT, True):
                     print("Cat on RIGHT side - activating RIGHT relay")
@@ -1045,6 +1146,9 @@ def process_actions(frame, detections, fps):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     cv2.putText(annotated_frame, timestamp, (width - 250, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    # Draw relay status on frame
+    annotated_frame = draw_relay_status(annotated_frame, active_relays)
     
     return annotated_frame
 
@@ -1409,6 +1513,10 @@ def main():
         # Configure camera
         camera = setup_camera()
         
+        # Initialize video writer if recording is enabled
+        video_writer = init_video_writer() if RECORD_VIDEO else None
+        video_start_time = time.time()
+        
         # Initialize GPIO if not in dev mode
         if not DEV_MODE:
             init_gpio()
@@ -1501,6 +1609,22 @@ def main():
             # Process actions and update display regardless of whether we did inference
             processed_frame = process_actions(frame, detections, fps)
             
+            # Record video if enabled
+            if RECORD_VIDEO and video_writer is not None:
+                try:
+                    # Write the processed frame (with annotations) to video
+                    video_writer.write(processed_frame)
+                    
+                    # Check if we need to create a new video file (max length reached)
+                    video_duration = time.time() - video_start_time
+                    if video_duration >= VIDEO_MAX_LENGTH:
+                        print(f"Video reached maximum length ({VIDEO_MAX_LENGTH}s), creating new file")
+                        video_writer = create_new_video_writer(video_writer)
+                        video_start_time = time.time()
+                        
+                except Exception as e:
+                    print(f"Error writing video frame: {e}")
+            
             # Only save FPS report periodically
             current_time = time.time()
             if current_time - last_fps_print >= 10.0:  # Every 10 seconds
@@ -1531,6 +1655,11 @@ def main():
     finally:
         # Clean up resources
         cleanup()
+        
+        # Clean up video writer
+        if RECORD_VIDEO and 'video_writer' in locals() and video_writer is not None:
+            cleanup_video_writer(video_writer)
+            
         print("Program terminated")
 
 try:
