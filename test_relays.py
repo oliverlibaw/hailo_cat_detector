@@ -23,20 +23,23 @@ except ImportError as e:
 
 # GPIO Pin Setup - using the same pin definitions as the main script
 RELAY_PINS = {
-    'squirt': 16,    # Squirt relay (triggers water gun)
+    'squirt': 5,     # Squirt relay (triggers water gun) - Changed to pin 5 (Channel 1)
     'left': 6,      # Left relay (triggers for left-side movement)
     'right': 13,    # Right relay (triggers for right-side movement)
-    'unused': 15    # Unused relay
+    'unused': 16    # Changed to pin 16 (Channel 4)
 }
 
 # Important: Set to True if your relay module activates on LOW rather than HIGH
 RELAY_ACTIVE_LOW = True    # Many relay HATs activate on LOW signal
 
 # This flag indicates relays are "normally closed" - they're ON when not activated
-RELAY_NORMALLY_CLOSED = True  # Set to True if relays are ON by default and turn OFF when activated
+RELAY_NORMALLY_CLOSED = False  # Changed to False since we're hearing the relay click
+
+# Enable debug mode for detailed relay states
+DEBUG_MODE = True
 
 # Duration for each activation (seconds)
-DEFAULT_DURATION = 0.5
+DEFAULT_DURATION = 1.0  # Increased default duration to 1.0 seconds
 
 def setup_gpio():
     """Initialize GPIO pins for relays"""
@@ -73,7 +76,14 @@ def set_relay(pin, state):
     gpio_state = GPIO.LOW if (actual_state and RELAY_ACTIVE_LOW) or (not actual_state and not RELAY_ACTIVE_LOW) else GPIO.HIGH
     
     # Print the exact GPIO state being set for debugging
-    print(f"Setting GPIO pin {pin} to {'LOW' if gpio_state == GPIO.LOW else 'HIGH'}")
+    if DEBUG_MODE:
+        print(f"Setting GPIO pin {pin} to {'LOW' if gpio_state == GPIO.LOW else 'HIGH'}")
+        print(f"  - State requested: {state} (ON if True, OFF if False)")
+        print(f"  - Normally closed: {RELAY_NORMALLY_CLOSED}")
+        print(f"  - Active low: {RELAY_ACTIVE_LOW}")
+        print(f"  - Actual state after adjustments: {actual_state}")
+    else:
+        print(f"Setting GPIO pin {pin} to {'LOW' if gpio_state == GPIO.LOW else 'HIGH'}")
     
     # Set the GPIO pin state
     GPIO.output(pin, gpio_state)
@@ -118,12 +128,14 @@ def relay_test():
         print("  d - Toggle relay activation duration (current: {}s)".format(DEFAULT_DURATION))
         print("  t - Test all relays in sequence")
         print("  i - Inverse test (activates each relay by turning others ON)")
+        print("  m - Toggle debug mode (current: {})".format(DEBUG_MODE))
+        print("  p - Pulse test (rapidly toggle relay on/off)")
         print("  q - Quit the program")
         
         duration = DEFAULT_DURATION
         
         while True:
-            command = input(f"\nEnter command (l/r/s/a/0/d/t/i/q) [duration={duration}s]: ").lower().strip()
+            command = input(f"\nEnter command (l/r/s/a/0/d/t/i/m/p/q) [duration={duration}s]: ").lower().strip()
             
             if command == 'q':
                 print("Exiting program...")
@@ -226,8 +238,42 @@ def relay_test():
                     set_relay(pin, False)
                 print("\nInverse relay test completed, all relays OFF")
                 
+            elif command == 'm':
+                # Toggle debug mode
+                global DEBUG_MODE
+                DEBUG_MODE = not DEBUG_MODE
+                print(f"Debug mode {'enabled' if DEBUG_MODE else 'disabled'}")
+                
+            elif command == 'p':
+                # Pulse test for squirt relay
+                relay_name = input("Enter relay to pulse test (l/r/s): ").lower().strip()
+                if relay_name == 'l':
+                    pin = RELAY_PINS['left']
+                    name = "LEFT"
+                elif relay_name == 'r':
+                    pin = RELAY_PINS['right']
+                    name = "RIGHT"
+                elif relay_name == 's':
+                    pin = RELAY_PINS['squirt']
+                    name = "SQUIRT"
+                else:
+                    print("Invalid relay selection.")
+                    continue
+                
+                pulse_count = int(input(f"Enter number of pulses for {name} relay: ") or "5")
+                pulse_duration = float(input(f"Enter pulse duration in seconds (e.g. 0.1): ") or "0.1")
+                
+                print(f"\nPulsing {name} relay {pulse_count} times with {pulse_duration}s pulses...")
+                for i in range(pulse_count):
+                    print(f"Pulse {i+1}/{pulse_count}")
+                    set_relay(pin, True)
+                    time.sleep(pulse_duration)
+                    set_relay(pin, False)
+                    time.sleep(pulse_duration)
+                print(f"Pulse test completed for {name} relay")
+                
             else:
-                print("Unknown command. Please use l, r, s, a, 0, d, t, i, or q.")
+                print("Unknown command. Please use l, r, s, a, 0, d, t, i, m, p, or q.")
                 
     except KeyboardInterrupt:
         print("\nProgram interrupted by user. Cleaning up...")
