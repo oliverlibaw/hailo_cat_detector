@@ -35,6 +35,9 @@ RELAY_ACTIVE_LOW = True    # Many relay HATs activate on LOW signal
 # This flag indicates relays are "normally closed" - they're ON when not activated
 RELAY_NORMALLY_CLOSED = True  # Set to True if relays are ON by default and turn OFF when activated
 
+# Duration for each activation (seconds)
+DEFAULT_DURATION = 0.5
+
 def setup_gpio():
     """Initialize GPIO pins for relays"""
     GPIO.setmode(GPIO.BCM)
@@ -69,18 +72,42 @@ def set_relay(pin, state):
     # Invert the signal if relays are active LOW
     gpio_state = GPIO.LOW if (actual_state and RELAY_ACTIVE_LOW) or (not actual_state and not RELAY_ACTIVE_LOW) else GPIO.HIGH
     
+    # Print the exact GPIO state being set for debugging
+    print(f"Setting GPIO pin {pin} to {'LOW' if gpio_state == GPIO.LOW else 'HIGH'}")
+    
     # Set the GPIO pin state
     GPIO.output(pin, gpio_state)
     
     # Return the physical relay state for clarity
     return "OPEN" if state else "CLOSED" if RELAY_NORMALLY_CLOSED else "CLOSED" if state else "OPEN"
 
+def activate_relay_with_duration(pin, duration, name):
+    """Activate a relay for a specific duration and then turn it off"""
+    try:
+        # Turn on the relay
+        print(f"Activating {name} relay (pin {pin}) for {duration} seconds...")
+        relay_state = set_relay(pin, True)
+        print(f"{name} relay now physically {relay_state}")
+        
+        # Keep it on for the duration
+        time.sleep(duration)
+        
+        # Turn off the relay
+        relay_state = set_relay(pin, False)
+        print(f"{name} relay now physically {relay_state}")
+        
+    except KeyboardInterrupt:
+        # Handle Ctrl+C
+        set_relay(pin, False)
+        print(f"\nInterrupted! {name} relay turned OFF")
+        raise
+
 def relay_test():
     """Interactive relay testing function"""
     try:
         setup_gpio()
         
-        print("\n=== Relay Test Script ===")
+        print("\n=== Relay Test Script (Enhanced) ===")
         print(f"Relay configuration: {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'}, {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
         print("\nCommands:")
         print("  l - Activate LEFT movement relay (pin {})".format(RELAY_PINS['left']))
@@ -88,54 +115,119 @@ def relay_test():
         print("  s - Activate SQUIRT relay (pin {})".format(RELAY_PINS['squirt']))
         print("  a - Activate ALL relays")
         print("  0 - Turn OFF all relays")
+        print("  d - Toggle relay activation duration (current: {}s)".format(DEFAULT_DURATION))
+        print("  t - Test all relays in sequence")
+        print("  i - Inverse test (activates each relay by turning others ON)")
         print("  q - Quit the program")
-        print("\nActive relays will remain ON until turned off or program exit.")
+        
+        duration = DEFAULT_DURATION
         
         while True:
-            command = input("\nEnter command (l/r/s/a/0/q): ").lower().strip()
+            command = input(f"\nEnter command (l/r/s/a/0/d/t/i/q) [duration={duration}s]: ").lower().strip()
             
             if command == 'q':
                 print("Exiting program...")
                 break
                 
             elif command == 'l':
-                # Turn on left relay, turn off others
-                relay_state = set_relay(RELAY_PINS['left'], True)
-                set_relay(RELAY_PINS['right'], False)
-                set_relay(RELAY_PINS['squirt'], False)
-                print(f"LEFT relay activated (pin {RELAY_PINS['left']}) - Relay physically {relay_state}")
+                # Left relay test
+                activate_relay_with_duration(RELAY_PINS['left'], duration, "LEFT")
                 
             elif command == 'r':
-                # Turn on right relay, turn off others
-                relay_state = set_relay(RELAY_PINS['right'], True)
-                set_relay(RELAY_PINS['left'], False)
-                set_relay(RELAY_PINS['squirt'], False)
-                print(f"RIGHT relay activated (pin {RELAY_PINS['right']}) - Relay physically {relay_state}")
+                # Right relay test
+                activate_relay_with_duration(RELAY_PINS['right'], duration, "RIGHT")
                 
             elif command == 's':
-                # Turn on squirt relay, turn off others
-                relay_state = set_relay(RELAY_PINS['squirt'], True)
-                set_relay(RELAY_PINS['left'], False)
-                set_relay(RELAY_PINS['right'], False)
-                print(f"SQUIRT relay activated (pin {RELAY_PINS['squirt']}) - Relay physically {relay_state}")
+                # Squirt relay test
+                activate_relay_with_duration(RELAY_PINS['squirt'], duration, "SQUIRT")
                 
             elif command == 'a':
                 # Turn on all relays
-                states = []
+                print("Activating ALL relays...")
                 for name, pin in RELAY_PINS.items():
                     if name != 'unused':
                         state = set_relay(pin, True)
-                        states.append(f"{name}={state}")
-                print(f"ALL relays activated: {', '.join(states)}")
+                        print(f"{name.upper()} relay (pin {pin}) physically {state}")
+                
+                print(f"Keeping ALL relays ON for {duration} seconds...")
+                time.sleep(duration)
+                
+                # Turn off all relays
+                print("Deactivating ALL relays...")
+                for name, pin in RELAY_PINS.items():
+                    if name != 'unused':
+                        state = set_relay(pin, False)
+                        print(f"{name.upper()} relay (pin {pin}) physically {state}")
                 
             elif command == '0':
                 # Turn off all relays
+                for name, pin in RELAY_PINS.items():
+                    if name != 'unused':
+                        state = set_relay(pin, False)
+                        print(f"{name.upper()} relay (pin {pin}) physically {state}")
+                print("All relays turned OFF")
+            
+            elif command == 'd':
+                # Change duration
+                try:
+                    new_duration = float(input(f"Enter new duration in seconds (current: {duration}s): "))
+                    if new_duration > 0:
+                        duration = new_duration
+                        print(f"Duration set to {duration} seconds")
+                    else:
+                        print("Duration must be positive. Using current value.")
+                except ValueError:
+                    print("Invalid input. Using current duration.")
+            
+            elif command == 't':
+                # Test all relays in sequence
+                print("\n=== Testing all relays in sequence ===")
+                
+                # First make sure all relays are OFF
                 for pin in RELAY_PINS.values():
                     set_relay(pin, False)
                 print("All relays turned OFF")
+                time.sleep(1)
+                
+                # Test each relay one by one
+                for name, pin in RELAY_PINS.items():
+                    if name != 'unused':
+                        print(f"\nTesting {name.upper()} relay (pin {pin})...")
+                        activate_relay_with_duration(pin, duration, name.upper())
+                        time.sleep(0.5)
+                
+                print("\nSequential relay test completed")
+            
+            elif command == 'i':
+                # Inverse test (turn on all except one)
+                print("\n=== Inverse relay test ===")
+                print("This will turn ON all relays EXCEPT the specified one")
+                print("(This might help if your relays are connected in reverse)")
+                
+                # Turn on all relays first
+                for pin in RELAY_PINS.values():
+                    if pin != RELAY_PINS['unused']:
+                        set_relay(pin, True)
+                print("All relays turned ON")
+                time.sleep(1)
+                
+                # Now test by turning each relay OFF one at a time
+                for name, pin in RELAY_PINS.items():
+                    if name != 'unused':
+                        print(f"\nDeactivating only {name.upper()} relay (pin {pin})...")
+                        set_relay(pin, False)
+                        print(f"Waiting {duration} seconds...")
+                        time.sleep(duration)
+                        set_relay(pin, True)
+                        time.sleep(0.5)
+                
+                # Turn everything off at the end
+                for pin in RELAY_PINS.values():
+                    set_relay(pin, False)
+                print("\nInverse relay test completed, all relays OFF")
                 
             else:
-                print("Unknown command. Please use l, r, s, a, 0, or q.")
+                print("Unknown command. Please use l, r, s, a, 0, d, t, i, or q.")
                 
     except KeyboardInterrupt:
         print("\nProgram interrupted by user. Cleaning up...")
