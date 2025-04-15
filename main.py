@@ -63,13 +63,30 @@ RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
 INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
 FRAME_SKIP = 3  # Process only every Nth frame for inference (higher = better FPS but less responsive)
 FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_HEIGHT = 640  # Updated to match model input size for better accuracy
 FPS = 15  # Target FPS
 DEBUG_MODE = True  # Enable for debugging relay issues
 VERBOSE_OUTPUT = False  # Reduce console output
 SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
 SAVE_INTERVAL = 30  # Only save every 30th frame with detections to improve performance
 MAX_SAVED_FRAMES = 20  # Maximum number of frames to keep before overwriting old ones
+
+# Optimized camera settings for better detection in varying light conditions
+CAMERA_SETTINGS = {
+    "AeEnable": True,           # Auto exposure
+    "AwbEnable": True,          # Auto white balance
+    "AeExposureMode": 0,        # Normal exposure mode
+    "AeMeteringMode": 0,        # Center-weighted metering
+    "ExposureTime": 0,          # Let auto-exposure handle it
+    "AnalogueGain": 1.5,        # Increased gain for better low-light performance
+    "Brightness": 0.2,          # Increased brightness for better illumination
+    "Contrast": 1.1,            # Slightly increased contrast for better visibility
+    "Saturation": 1.1,          # Slightly increased saturation for better color
+    "FrameRate": FPS,           # Set desired frame rate
+    "AeConstraintMode": 0,      # Normal constraint mode
+    "AwbMode": 1,               # Auto white balance mode (1 is typically auto)
+    "ExposureValue": 0.5        # Positive EV compensation to improve brightness
+}
 
 # Cat class names
 CAT_CLASSES = {
@@ -195,25 +212,36 @@ def setup_camera():
         print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
         return camera
     else:
-        print("Setting up Pi camera...")
+        print("Setting up Pi camera with optimized detection settings...")
         try:
             from picamera2 import Picamera2
             
-            # Create and configure Picamera2
+            # Create Picamera2 instance
             picam2 = Picamera2()
             
-            # Configure camera with preview configuration
-            camera_config = picam2.create_preview_configuration(
-                main={"format": "RGB888", "size": (FRAME_WIDTH, FRAME_HEIGHT)}
+            # Configure camera with improved settings for detection
+            camera_config = picam2.create_video_configuration(
+                main={
+                    "size": (FRAME_WIDTH, FRAME_HEIGHT),
+                    "format": "XBGR8888"  # Use XBGR for better color handling
+                },
+                controls=CAMERA_SETTINGS
             )
             
             # Apply the configuration
             picam2.configure(camera_config)
             
+            # Add tuning options to improve low-light performance
+            picam2.set_controls({"NoiseReductionMode": 2})  # Enhanced noise reduction
+            
+            print(f"Pi camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
+            print("Camera settings:")
+            for setting, value in CAMERA_SETTINGS.items():
+                print(f"  {setting}: {value}")
+                
             # Start the camera
             picam2.start()
             
-            print(f"Pi camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
             return picam2
         except Exception as e:
             print(f"Error setting up Pi camera: {e}")
@@ -256,8 +284,15 @@ def get_frame(camera):
     else:
         try:
             frame = camera.capture_array()
-            # Convert from RGB to BGR for OpenCV
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            
+            # Handle different color formats
+            if frame.shape[2] == 4:  # If it has 4 channels (XBGR)
+                # Convert XBGR to BGR by dropping the X channel
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+            else:
+                # Convert RGB to BGR for OpenCV if needed
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                
             # Always resize the frame to the model input size
             frame = cv2.resize(frame, MODEL_INPUT_SIZE)
             return frame
@@ -1114,8 +1149,13 @@ def read_frame(camera):
                 # Get frame directly from Picamera2
                 frame = camera.capture_array()
                 
-                # Convert from RGB to BGR for OpenCV
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                # Handle different color formats
+                if frame.shape[2] == 4:  # If it has 4 channels (XBGR)
+                    # Convert XBGR to BGR by dropping the X channel
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+                else:
+                    # Convert RGB to BGR for OpenCV if needed
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
                 # Resize if needed
                 if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
