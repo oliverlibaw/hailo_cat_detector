@@ -23,8 +23,8 @@ except ImportError as e:
 
 # GPIO Pin Setup - using the same pin definitions as the main script
 RELAY_PINS = {
-    'squirt': 6,    # Center relay (triggers squirt)
-    'left': 5,      # Left relay (triggers for left-side movement)
+    'squirt': 5,    # Squirt relay (triggers water gun)
+    'left': 6,      # Left relay (triggers for left-side movement)
     'right': 13,    # Right relay (triggers for right-side movement)
     'unused': 15    # Unused relay
 }

@@ -37,9 +37,9 @@ if not DEV_MODE:
 
 # GPIO Pin Setup
 RELAY_PINS = {
-    'center': 6,    # Center relay (triggers on any detection)
-    'left': 5,      # Left relay (triggers for left-side detections)
-    'right': 13,    # Right relay (triggers for right-side detections)
+    'squirt': 5,    # Squirt relay (triggers water gun)
+    'left': 6,      # Left relay (triggers for left-side movement)
+    'right': 13,    # Right relay (triggers for right-side movement)
     'unused': 15    # Unused relay
 }
 
@@ -59,8 +59,8 @@ model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # YOLO11s mod
 DETECTION_THRESHOLD = 0.30  # Confidence threshold for detections (lowered from 0.40 for better recall)
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv11 input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
-RELAY_CENTER_DURATION = 0.2  # Duration to activate center relay
-RELAY_CENTER_COOLDOWN = 1.0  # Cooldown period for center relay
+RELAY_SQUIRT_DURATION = 0.2  # Duration to activate squirt relay
+RELAY_SQUIRT_COOLDOWN = 1.0  # Cooldown period for squirt relay
 INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
 FRAME_SKIP = 3  # Process only every Nth frame for inference (higher = better FPS but less responsive)
 FRAME_WIDTH = 640
@@ -161,19 +161,19 @@ COLOR_NAMES = {
 }
 
 # Global variables
-last_center_activation = 0
+last_squirt_activation = 0
 last_action = None
 last_action_time = 0
 last_valid_overlay = None  # Stores the last valid image overlay from the model
 
 # Cache for relay states to prevent unnecessary toggling
 relay_state_cache = {
-    RELAY_PINS['center']: False,
+    RELAY_PINS['squirt']: False,
     RELAY_PINS['left']: False,
     RELAY_PINS['right']: False
 }
 last_relay_change_time = {
-    RELAY_PINS['center']: 0,
+    RELAY_PINS['squirt']: 0,
     RELAY_PINS['left']: 0,
     RELAY_PINS['right']: 0
 }
@@ -439,7 +439,7 @@ def activate_relay(pin, duration=0.1):
         GPIO.output(pin, GPIO.LOW)
     else:
         # Simulate relay activation with messages and sound
-        if pin == RELAY_PINS['center']:
+        if pin == RELAY_PINS['squirt']:
             last_action = "SQUIRT!"
             print("Squirt!")
             play_sound()
@@ -453,7 +453,7 @@ def activate_relay(pin, duration=0.1):
 
 def handle_detection(bbox, frame_width):
     """Handle detection and activate appropriate relays"""
-    global last_center_activation
+    global last_squirt_activation
     
     x1, y1, x2, y2 = map(int, bbox)
     center_x = (x1 + x2) / 2
@@ -461,10 +461,10 @@ def handle_detection(bbox, frame_width):
     
     current_time = time.time()
     
-    # Check if we can activate the center relay (cooldown period)
-    if current_time - last_center_activation >= RELAY_CENTER_COOLDOWN:
-        activate_relay(RELAY_PINS['center'], RELAY_CENTER_DURATION)
-        last_center_activation = current_time
+    # Check if we can activate the squirt relay (cooldown period)
+    if current_time - last_squirt_activation >= RELAY_SQUIRT_COOLDOWN:
+        activate_relay(RELAY_PINS['squirt'], RELAY_SQUIRT_DURATION)
+        last_squirt_activation = current_time
     
     # Activate left or right relay based on position
     if relative_position < -CENTER_THRESHOLD:
@@ -955,8 +955,8 @@ def draw_relay_status(frame, active_relays):
     y_offset = 100
     
     # Draw center/squirt relay status
-    center_status = "SQUIRT: ON" if active_relays.get('center', False) else "SQUIRT: OFF"
-    color = (0, 255, 0) if active_relays.get('center', False) else (0, 0, 255)
+    center_status = "SQUIRT: ON" if active_relays.get('squirt', False) else "SQUIRT: OFF"
+    color = (0, 255, 0) if active_relays.get('squirt', False) else (0, 0, 255)
     cv2.putText(frame, center_status, (width - 170, y_offset), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     
@@ -1013,7 +1013,7 @@ def process_actions(frame, detections, fps):
     
     # Track active relays for display
     active_relays = {
-        'center': False,
+        'squirt': False,
         'left': False,
         'right': False
     }
@@ -1045,9 +1045,9 @@ def process_actions(frame, detections, fps):
         
         # Set relay states based on object position
         if not DEV_MODE:
-            # Always activate center relay for any detection
-            active_relays['center'] = True
-            set_relay(RELAY_PINS['center'], True)
+            # Always activate squirt relay for any detection
+            active_relays['squirt'] = True
+            set_relay(RELAY_PINS['squirt'], True)
             
             if relative_position < -CENTER_THRESHOLD:
                 # Object is on the left side
@@ -1135,8 +1135,8 @@ def process_actions(frame, detections, fps):
         if not DEV_MODE:
             # Turn off relays when no detections are found
             # Only print debug messages if the relay state actually changes
-            if set_relay(RELAY_PINS['center'], False) and DEBUG_MODE:
-                print("No detections - center relay OFF")
+            if set_relay(RELAY_PINS['squirt'], False) and DEBUG_MODE:
+                print("No detections - squirt relay OFF")
             if set_relay(RELAY_PIN_LEFT, False) and DEBUG_MODE:
                 print("No detections - left relay OFF")
             if set_relay(RELAY_PIN_RIGHT, False) and DEBUG_MODE:
@@ -1282,7 +1282,7 @@ def init_gpio():
         # Setup all relay pins as OUTPUT
         GPIO.setup(RELAY_PIN_LEFT, GPIO.OUT)
         GPIO.setup(RELAY_PIN_RIGHT, GPIO.OUT)
-        GPIO.setup(RELAY_PINS['center'], GPIO.OUT)
+        GPIO.setup(RELAY_PINS['squirt'], GPIO.OUT)
         GPIO.setup(RELAY_PINS['unused'], GPIO.OUT)  # Setup unused relay too
         
         # For normally closed relays with active LOW:
@@ -1295,7 +1295,7 @@ def init_gpio():
         for name, pin in RELAY_PINS.items():
             set_relay(pin, initial_state)
         
-        print(f"GPIO initialized with relay pins: center={RELAY_PINS['center']}, left={RELAY_PIN_LEFT}, right={RELAY_PIN_RIGHT}")
+        print(f"GPIO initialized with relay pins: squirt={RELAY_PINS['squirt']}, left={RELAY_PIN_LEFT}, right={RELAY_PIN_RIGHT}")
         print(f"Relays are {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'} and {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
     except ImportError:
         print("WARNING: RPi.GPIO module not available, GPIO control disabled")
@@ -1645,7 +1645,7 @@ def main():
         if not DEV_MODE:
             set_relay(RELAY_PIN_LEFT, False)
             set_relay(RELAY_PIN_RIGHT, False)
-            set_relay(RELAY_PINS['center'], False)
+            set_relay(RELAY_PINS['squirt'], False)
         
     except Exception as e:
         print(f"Error in main loop: {str(e)}")
