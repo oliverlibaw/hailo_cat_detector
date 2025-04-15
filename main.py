@@ -37,7 +37,7 @@ if not DEV_MODE:
 
 # GPIO Pin Setup
 RELAY_PINS = {
-    'squirt': 5,    # Squirt relay (triggers water gun)
+    'squirt': 16,    # Squirt relay (triggers water gun)
     'left': 6,      # Left relay (triggers for left-side movement)
     'right': 13,    # Right relay (triggers for right-side movement)
     'unused': 15    # Unused relay
