@@ -231,8 +231,12 @@ def load_model(model_name, zoo_path):
         return None
 
 def process_frame(frame, model, detection_threshold, show_all=False):
-    """Process a single frame through the model."""
+    """Process a single frame through the model and return frame with detections drawn."""
     try:
+        # Get frame dimensions for visualization
+        height, width = frame.shape[:2]
+        original_frame = frame.copy()  # Create a copy for visualization
+        
         # Preprocess the frame
         preprocessed = preprocess_frame(frame)
         
@@ -247,10 +251,35 @@ def process_frame(frame, model, detection_threshold, show_all=False):
                     if show_all or detection.get('category_id') in TARGET_CLASS_IDS:
                         detections.append(detection)
         
-        return detections
+        # Draw bounding boxes on the original frame
+        for detection in detections:
+            # Get bounding box coordinates
+            x1, y1, x2, y2 = detection['bbox']
+            
+            # Get target class and color
+            class_id = detection.get('category_id')
+            label = detection.get('label', 'Unknown')
+            score = detection.get('score', 0.0)
+            
+            # Select color based on class ID
+            if class_id in COLORS:
+                color = COLORS[class_id]
+            else:
+                color = DEFAULT_COLOR
+            
+            # Draw rectangle
+            cv2.rectangle(original_frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+            
+            # Create label with class name and score
+            label_text = f"{label}: {score:.2f}"
+            cv2.putText(original_frame, label_text, (int(x1), int(y1) - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Return the frame with bounding boxes drawn
+        return original_frame
     except Exception as e:
         print(f"Error processing frame: {str(e)}")
-        return []
+        return frame  # Return the original frame if there was an error
 
 def process_video(input_path, output_path, model, threshold, show_all):
     """Process a video file frame by frame."""
@@ -290,10 +319,10 @@ def process_video(input_path, output_path, model, threshold, show_all):
                 print("End of video stream.")
                 break
 
-            # Process the frame
+            # Process the frame and draw bounding boxes
             processed_frame = process_frame(frame, model, threshold, show_all)
 
-            # Write the processed frame (with boxes drawn)
+            # Write the processed frame
             out.write(processed_frame)
 
             processed_frames += 1
@@ -308,12 +337,6 @@ def process_video(input_path, output_path, model, threshold, show_all):
                          print(f"Processed {processed_frames}/{frame_count} frames ({percent_complete:.1f}%) - Elapsed: {elapsed:.1f}s")
                 else:
                     print(f"Processed {processed_frames} frames - Elapsed: {elapsed:.1f}s")
-
-            # Optional: Save sample frames periodically
-            # if processed_frames % 100 == 0:
-            #     sample_path = f"sample_frame_{processed_frames}.jpg"
-            #     cv2.imwrite(sample_path, processed_frame)
-            #     print(f"Saved sample frame to {sample_path}")
 
     except KeyboardInterrupt:
         print("\nProcessing interrupted by user.")
