@@ -115,6 +115,7 @@ def activate_relay_with_duration(pin, duration, name):
 def relay_test():
     """Interactive relay testing function"""
     try:
+        global DEBUG_MODE  # Moved global declaration to the beginning of the function
         setup_gpio()
         
         print("\n=== Relay Test Script (Enhanced) ===")
@@ -240,7 +241,6 @@ def relay_test():
                 
             elif command == 'm':
                 # Toggle debug mode
-                global DEBUG_MODE
                 DEBUG_MODE = not DEBUG_MODE
                 print(f"Debug mode {'enabled' if DEBUG_MODE else 'disabled'}")
                 
