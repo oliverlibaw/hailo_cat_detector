@@ -21,6 +21,7 @@ MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
 MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo" # Ensure this path is correct
 DEFAULT_THRESHOLD = 0.3 # Default detection threshold
 OUTPUT_PATH = "debug_output.mp4" # Default output file
+DEFAULT_VIDEO_PATH = "/home/pi5/Projects/hailo_cat_detector/test_videos/pi_camera_test_640x640_60s.mp4" # Default video path
 
 # COCO class IDs for cats and dogs (Verify these match your model's output)
 # Common COCO IDs: Cat=16, Dog=17 in some versions (0-indexed)
@@ -136,12 +137,15 @@ def reverse_rescale_bboxes(annotations, scale, pad_top, pad_left, original_shape
 
 def get_video_path():
     """Prompt user for video file path."""
-    while True:
-        video_path = input("Enter the path to the video file: ")
-        if os.path.exists(video_path):
-            return video_path
+    print(f"Default video path: {DEFAULT_VIDEO_PATH}")
+    video_path = input("Enter the path to the video file (press Enter to use default): ").strip()
+    if not video_path:
+        video_path = DEFAULT_VIDEO_PATH
+    if not os.path.exists(video_path):
         print(f"Error: File not found: {video_path}")
         print("Please enter a valid video file path.")
+        return get_video_path()
+    return video_path
 
 def preprocess_frame(frame, target_shape=(640, 640)):
     """
@@ -163,19 +167,9 @@ def preprocess_frame(frame, target_shape=(640, 640)):
     # Ensure the image is in uint8 format (0-255 range)
     normalized = resized.astype(np.uint8)
     
-    # Add batch dimension and ensure correct shape
-    # For OpenCV backend, we need to ensure the shape is exactly (1, height, width, 3)
-    batched = np.expand_dims(normalized, axis=0)
-    
-    # Verify the shape matches exactly what the model expects
-    if batched.shape != (1, 640, 640, 3):
-        raise ValueError(f"Invalid shape: {batched.shape}. Expected (1, 640, 640, 3)")
-    
-    # Ensure the data type is uint8
-    if batched.dtype != np.uint8:
-        batched = batched.astype(np.uint8)
-    
-    return batched
+    # For OpenCV backend, we need to ensure the shape is (height, width, channels)
+    # and let the model handle the batch dimension
+    return normalized
 
 def load_model(model_name, zoo_path):
     """Load the specified Degirum model."""
