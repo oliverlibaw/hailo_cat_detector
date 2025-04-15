@@ -19,18 +19,21 @@ VIDEO_FPS = 30
 OUTPUT_DIR = "test_videos"  # Directory to save videos
 OUTPUT_FILENAME = f"pi_camera_test_{VIDEO_WIDTH}x{VIDEO_HEIGHT}_{VIDEO_DURATION}s.mp4"
 
-# Camera settings optimized for detection
+# Camera settings optimized for detection with improved brightness
 CAMERA_SETTINGS = {
     "AeEnable": True,  # Auto exposure
     "AwbEnable": True,  # Auto white balance
     "AeExposureMode": 0,  # Normal exposure mode
     "AeMeteringMode": 0,  # Center-weighted metering
     "ExposureTime": 0,  # Let auto-exposure handle it
-    "AnalogueGain": 1.0,  # Let auto-gain handle it
-    "Brightness": 0.0,  # Default brightness
-    "Contrast": 1.0,  # Default contrast
-    "Saturation": 1.0,  # Default saturation
-    "FrameRate": VIDEO_FPS  # Set desired frame rate
+    "AnalogueGain": 1.5,  # Increased from 1.0 to improve brightness
+    "Brightness": 0.2,  # Increased from 0.0 for better illumination
+    "Contrast": 1.1,  # Slightly increased for better visibility
+    "Saturation": 1.1,  # Slightly increased for better color
+    "FrameRate": VIDEO_FPS,  # Set desired frame rate
+    "AeConstraintMode": 0,  # Normal constraint mode
+    "AwbMode": 1,  # Auto white balance mode (1 is typically auto)
+    "ExposureValue": 0.5  # Positive EV compensation to improve brightness
 }
 
 def record_test_video(output_path, duration):
@@ -50,6 +53,10 @@ def record_test_video(output_path, duration):
         
         # Apply the configuration
         picam2.configure(video_config)
+        
+        # Add tuning options to improve low-light performance
+        picam2.set_controls({"NoiseReductionMode": 2})  # Enhanced noise reduction
+        
         print(f"Configured for {VIDEO_WIDTH}x{VIDEO_HEIGHT} @ {VIDEO_FPS} FPS")
         print("Camera settings:")
         for setting, value in CAMERA_SETTINGS.items():
