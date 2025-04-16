@@ -23,10 +23,10 @@ except ImportError as e:
 
 # GPIO Pin Setup - using the same pin definitions as the main script
 RELAY_PINS = {
-    'squirt': 16,     # Squirt relay (triggers water gun) - Changed to pin 5 (Channel 1)
+    'squirt': 5,     # Squirt relay (triggers water gun) - Channel 1
     'left': 13,      # Left relay (triggers for left-side movement)
     'right': 6,    # Right relay (triggers for right-side movement)
-    'unused': 5    # Changed to pin 16 (Channel 4)
+    'unused': 16    # Unused relay - Channel 4
 }
 
 # Important: Set to True if your relay module activates on LOW rather than HIGH
@@ -48,10 +48,15 @@ def setup_gpio():
         GPIO.setup(pin, GPIO.OUT)
         
     # Start with all relays turned OFF
-    for pin in RELAY_PINS.values():
-        set_relay(pin, False)
+    print("Initializing all relays to OFF state...")
+    for name, pin in RELAY_PINS.items():
+        if name != 'unused':
+            set_relay(pin, False)
+            print(f"{name.upper()} relay (pin {pin}) initialized to OFF")
         
     print("GPIO pins initialized, all relays set to OFF state")
+    # Small delay to ensure changes take effect
+    time.sleep(0.5)
 
 def cleanup_gpio():
     """Clean up GPIO resources"""
@@ -117,6 +122,13 @@ def relay_test():
     try:
         global DEBUG_MODE  # Moved global declaration to the beginning of the function
         setup_gpio()
+        
+        # Double-check that all relays are off at startup
+        print("\nVerifying all relays are OFF...")
+        for name, pin in RELAY_PINS.items():
+            if name != 'unused':
+                # Force all relays to OFF state again
+                set_relay(pin, False)
         
         print("\n=== Relay Test Script (Enhanced) ===")
         print(f"Relay configuration: {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'}, {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
