@@ -36,8 +36,8 @@ RELAY_ACTIVE_LOW = True    # Many relay HATs activate on LOW signal
 RELAY_NORMALLY_CLOSED = False  # Changed to False since we're hearing the relay click
 
 # The squirt relay needs separate handling
-SQUIRT_RELAY_ON_STATE = GPIO.LOW   # Set to LOW if that turns the relay ON
-SQUIRT_RELAY_OFF_STATE = GPIO.HIGH  # Set to HIGH if that turns the relay OFF
+SQUIRT_RELAY_ON_STATE = GPIO.HIGH   # Set to HIGH to turn the relay ON
+SQUIRT_RELAY_OFF_STATE = GPIO.LOW   # Set to LOW to turn the relay OFF
 
 # Enable debug mode for detailed relay states
 DEBUG_MODE = True
