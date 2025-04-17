@@ -23,10 +23,10 @@ except ImportError as e:
 
 # GPIO Pin Setup - using the same pin definitions as the main script
 RELAY_PINS = {
-    'squirt': 16,     # Squirt relay (triggers water gun) - Channel 1
+    'squirt': 5,     # Squirt relay (triggers water gun) - Channel 1
     'left': 13,      # Left relay (triggers for left-side movement)
     'right': 6,    # Right relay (triggers for right-side movement)
-    'unused': 5    # Unused relay - Channel 4
+    'unused': 16    # Unused relay - Channel 4
 }
 
 # Important: Set to True if your relay module activates on LOW rather than HIGH
