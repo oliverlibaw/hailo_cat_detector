@@ -8,7 +8,6 @@ echo ""
 echo "DeGirum Requirements:"
 echo " - Hailo AI Kit accelerator must be connected via USB"
 echo " - DeGirum software must be installed (pip install degirum)"
-echo " - DeGirum service must be running (sudo systemctl start degirum)"
 echo " - Model zoo should be available at /home/pi5/degirum_model_zoo"
 echo ""
 echo "Fixed issues:"
@@ -32,8 +31,7 @@ echo ""
 echo "Troubleshooting DeGirum issues:"
 echo " - Ensure Hailo AI Kit is properly connected and powered via USB"
 echo " - Make sure the green light on the Hailo device is on"
-echo " - Check DeGirum service status: sudo systemctl status degirum"
-echo " - If service isn't running: sudo systemctl start degirum"
+echo " - Check that the Hailo device is recognized: lsusb | grep Hailo"
 echo " - If detection still fails, try rebooting: sudo reboot"
 echo ""
 echo "Troubleshooting detection issues:"
@@ -45,24 +43,17 @@ echo ""
 echo "Press Ctrl+C to stop the test at any time."
 echo ""
 
-# Check if DeGirum service is running
-if systemctl is-active --quiet degirum; then
-    echo "DeGirum service is running"
+# Check if Hailo device is connected
+if lsusb | grep -q Hailo; then
+    echo "Hailo device detected"
 else
-    echo "WARNING: DeGirum service is not running!"
-    echo "Starting DeGirum service..."
-    sudo systemctl start degirum
-    sleep 2
-    if systemctl is-active --quiet degirum; then
-        echo "DeGirum service started successfully"
-    else
-        echo "Failed to start DeGirum service. Detection may not work properly."
-        echo "Continue anyway? (y/n)"
-        read CONTINUE
-        if [ "$CONTINUE" != "y" ]; then
-            echo "Exiting. Try starting the service manually with: sudo systemctl start degirum"
-            exit 1
-        fi
+    echo "WARNING: Hailo device not detected!"
+    echo "Please ensure the Hailo AI Kit is properly connected via USB."
+    echo "Continue anyway? (y/n)"
+    read CONTINUE
+    if [ "$CONTINUE" != "y" ]; then
+        echo "Exiting. Connect the Hailo device and try again."
+        exit 1
     fi
 fi
 
