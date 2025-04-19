@@ -60,12 +60,28 @@ fi
 # Make the test script executable
 chmod +x test_tracking.py
 
+# Detect if we're already in a virtual environment
+if [ -n "$VIRTUAL_ENV" ]; then
+    echo "Running in virtual environment: $VIRTUAL_ENV"
+    PYTHON_PATH="$VIRTUAL_ENV/bin/python3"
+else
+    echo "No virtual environment detected, using system Python"
+    PYTHON_PATH="python3"
+    
+    # Check if cat_venv exists and use it if available
+    if [ -d "$HOME/Projects/hailo_cat_detector/cat_venv" ]; then
+        echo "Found cat_venv, using it instead"
+        PYTHON_PATH="$HOME/Projects/hailo_cat_detector/cat_venv/bin/python3"
+    fi
+fi
+
 # Run the test script with sudo if needed (for GPIO access)
 if [[ "$EUID" -ne 0 ]]; then
-    echo "Running with sudo for GPIO access..."
-    sudo python3 test_tracking.py
+    echo "Running with sudo to get GPIO access, preserving Python environment..."
+    # Use sudo with -E to preserve environment variables, and specify the exact Python executable
+    sudo -E $PYTHON_PATH test_tracking.py
 else
-    python3 test_tracking.py
+    $PYTHON_PATH test_tracking.py
 fi
 
 echo ""
