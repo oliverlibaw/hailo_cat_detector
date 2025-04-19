@@ -27,10 +27,15 @@ except ImportError:
 # Import DeGirum for Hailo AI Kit
 try:
     import degirum as dg
+    print("Successfully imported DeGirum module")
     DEGIRUM_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    print(f"Failed to import DeGirum: {e}")
+    print("Make sure DeGirum is installed:")
+    print("  pip install degirum")
+    print("  or follow installation instructions at https://docs.degirum.com/")
     DEGIRUM_AVAILABLE = False
-    print("DeGirum not available, using fallback detection")
+    print("DeGirum not available, detection will not work")
 
 # Configuration
 VIDEO_OUTPUT_DIR = "tracking_tests"
@@ -219,11 +224,24 @@ def load_model():
         zoo_path = "/home/pi5/degirum_model_zoo"
         if os.path.exists(zoo_path):
             print(f"Loading from local model zoo: {zoo_path}")
-            model = dg.load_model(
-                model_name=model_name,
-                inference_host_address="@local",
-                zoo_url=zoo_path
-            )
+            try:
+                # First try with full path
+                model = dg.load_model(
+                    model_name=model_name,
+                    inference_host_address="@local",
+                    zoo_url=zoo_path
+                )
+                print("Successfully loaded model with full path")
+            except Exception as e:
+                print(f"Error loading model with full path: {e}")
+                # Try with public model if local fails
+                print("Falling back to yolov8n_coco from public model")
+                model = dg.load_model(
+                    model_name="yolov8n_coco",
+                    inference_host_address="@local",
+                    zoo_url="degirum/public"
+                )
+                print("Successfully loaded public yolov8n_coco model")
         else:
             # Fall back to public model
             print("Local model zoo not found, using yolov8n_coco from public model")
@@ -232,6 +250,7 @@ def load_model():
                 inference_host_address="@local",
                 zoo_url="degirum/public"
             )
+            print("Successfully loaded public yolov8n_coco model")
             
         # Print model info for debugging
         print(f"Model loaded successfully: {model}")
@@ -251,7 +270,15 @@ def load_model():
         return model
     except Exception as e:
         print(f"Failed to load model: {e}")
-        print("Will use OpenCV DNN instead")
+        print(f"Detailed error info: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print("\nCheck that the Hailo AI Kit is properly connected and initialized.")
+        print("Make sure the DeGirum service is running:")
+        print("  sudo systemctl status degirum")
+        print("If not active, start it with:")
+        print("  sudo systemctl start degirum")
+        print("If issues persist, try reinstalling the DeGirum package.")
         return None
 
 def get_frame(camera):
@@ -653,6 +680,33 @@ def main():
         
         print("\n=== Tracking Calibration Test Script ===\n")
         
+        # Check DeGirum installation
+        if DEGIRUM_AVAILABLE:
+            print("DeGirum module is available")
+            try:
+                # Check if we can list available models
+                print("Checking DeGirum configuration...")
+                hosts = dg.list_host_addresses()
+                print(f"Available host addresses: {hosts}")
+                
+                # Check for local Hailo device
+                if "@local" in hosts:
+                    print("Local Hailo device detected")
+                    try:
+                        # Try to list models to verify connection
+                        models = dg.list_models(inference_host_address="@local")
+                        print(f"Available models: {models}")
+                    except Exception as e:
+                        print(f"Error listing models: {e}")
+                else:
+                    print("WARNING: No local Hailo device detected")
+            except Exception as e:
+                print(f"Error checking DeGirum configuration: {e}")
+        else:
+            print("WARNING: DeGirum module is NOT available")
+            print("Object detection will not work without DeGirum")
+            print("Please install DeGirum package and ensure Hailo device is connected")
+        
         # Setup camera
         camera = setup_camera()
         
@@ -665,7 +719,13 @@ def main():
         # Load model
         model = load_model()
         if model is None:
-            print("Warning: No object detection model available. Detection will not work.")
+            print("WARNING: No object detection model available. Detection will not work.")
+            print("This test will record video but won't detect objects or trigger relays.")
+            print("Press Ctrl+C to stop the test if you want to fix the DeGirum setup first.")
+            response = input("Do you want to continue without object detection? (y/n): ")
+            if response.lower() != 'y':
+                print("Test aborted. Please fix DeGirum setup and try again.")
+                return
         else:
             print(f"Model input shape: {model.input_shape if hasattr(model, 'input_shape') else 'unknown'}")
             if hasattr(model, 'output_shape'):
@@ -684,50 +744,125 @@ def main():
             # Initialize phase start time
             phase_start_time = time.time()
             
+            # Track frame count for skipping frames
+            frame_count = 0
+            frame_skip = 3  # Process every Nth frame for inference
+            
             # Main loop for this phase
             while time.time() - phase_start_time < TEST_DURATION:
                 # Get frame from camera
                 frame = get_frame(camera)
                 orig_frame = frame.copy()
                 
-                # Run detection
+                # Increment frame counter
+                frame_count += 1
+                
+                # Run detection (only on every Nth frame)
                 detections = []
-                if model is not None:
+                if model is not None and frame_count % frame_skip == 0:
                     try:
-                        # Convert BGR to RGB for model input
-                        input_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        
-                        # Prepare model input (match the approach in main.py)
-                        # Resize with letterbox to match model input requirements
-                        input_frame, scale, pad_top, pad_left = resize_image_letterbox(
-                            input_frame, (640, 640)
-                        )
-                        
-                        # Add batch dimension if needed
-                        if hasattr(model, 'input_shape') and model.input_shape[0] == 1:
-                            input_frame = np.expand_dims(input_frame, axis=0)
-                            
-                        # Run inference with the model (direct call like in main.py)
                         start_time = time.time()
-                        results = model(input_frame)
+                        
+                        # Use the same approach as in main.py
+                        if DEV_MODE:
+                            # In dev mode, use direct model call (not relevant for our Raspberry Pi setup)
+                            results = model(frame)
+                        else:
+                            # In production mode, use predict_batch method on the original frame
+                            # This is the key line that matches main.py's approach
+                            results_generator = model.predict_batch([frame])
+                            results = next(results_generator)
+                            
                         inference_time = time.time() - start_time
                         print(f"Inference time: {inference_time:.3f}s")
                         
-                        # Try alternative method with named inputs if previous call fails to detect
-                        if hasattr(results, 'results') and len(results.results) > 0:
-                            print("Using results from standard model call")
+                        # Process detection results using same approach as main.py
+                        detections = []
+                        
+                        # Check if results is in expected format
+                        if hasattr(results, 'results') and results.results:
+                            result_list = results.results
+                            print(f"Processing {len(result_list)} results from results.results")
+                        elif hasattr(results, 'results') and isinstance(results.results, list):
+                            result_list = results.results
+                            print(f"Processing {len(result_list)} results from results.results list")
+                        elif isinstance(results, list):
+                            result_list = results
+                            print(f"Processing {len(result_list)} results from direct results list")
                         else:
-                            print("Trying alternative prediction method...")
-                            # Some models require named inputs
-                            results = model.predict({"input": input_frame})
-                            print(f"Alternative method results type: {type(results)}")
+                            # No clear list of results found
+                            result_list = []
+                            print(f"No results found. Results type: {type(results)}")
+                            if hasattr(results, '__dict__'):
+                                print(f"Results attributes: {list(results.__dict__.keys())}")
+                        
+                        # Process detections from the result list
+                        for detection in result_list:
+                            try:
+                                # Try multiple approaches to extract bounding box information
+                                x1, y1, x2, y2, score, class_id = None, None, None, None, None, None
+                                
+                                # Method 1: Direct dictionary access
+                                if isinstance(detection, dict):
+                                    if 'bbox' in detection:
+                                        bbox = detection['bbox']
+                                        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                                            x1, y1, x2, y2 = map(int, bbox)
+                                        
+                                        score = float(detection.get('score', detection.get('confidence', 0.0)))
+                                        class_id = int(detection.get('category_id', detection.get('class_id', 0)))
+                                
+                                # Method 2: Object attribute access
+                                elif hasattr(detection, 'bbox'):
+                                    bbox = detection.bbox
+                                    
+                                    # Handle different bbox formats
+                                    if hasattr(bbox, 'x1') and hasattr(bbox, 'y1') and hasattr(bbox, 'x2') and hasattr(bbox, 'y2'):
+                                        x1, y1, x2, y2 = int(bbox.x1), int(bbox.y1), int(bbox.x2), int(bbox.y2)
+                                    elif hasattr(bbox, '__getitem__') and len(bbox) == 4:
+                                        x1, y1, x2, y2 = map(int, bbox)
+                                    
+                                    # Get score and class ID
+                                    if hasattr(detection, 'score'):
+                                        score = float(detection.score)
+                                    elif hasattr(detection, 'confidence'):
+                                        score = float(detection.confidence)
+                                    
+                                    if hasattr(detection, 'class_id'):
+                                        class_id = int(detection.class_id)
+                                    elif hasattr(detection, 'category_id'):
+                                        class_id = int(detection.category_id)
+                                
+                                # Skip invalid or incomplete detections
+                                if None in (x1, y1, x2, y2, score, class_id):
+                                    continue
+                                
+                                # Filter for cat and dog classes only
+                                if class_id not in CLASSES_TO_DETECT:
+                                    continue
+                                
+                                # Add detection if it meets threshold
+                                if score >= DETECTION_THRESHOLD:
+                                    # Make sure coordinates are within image bounds
+                                    height, width = frame.shape[:2]
+                                    x1 = max(0, min(width-1, x1))
+                                    y1 = max(0, min(height-1, y1))
+                                    x2 = max(0, min(width-1, x2))
+                                    y2 = max(0, min(height-1, y2))
+                                    
+                                    # Only add if the box has reasonable size
+                                    if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
+                                        detections.append((x1, y1, x2, y2, score, class_id))
+                                        print(f"Added detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}, class_id={class_id}")
                             
-                        # Process detection results
-                        detections = process_detections(results)
+                            except Exception as e:
+                                print(f"Error processing detection: {e}")
                         
                         if detections:
                             detected_classes = [COCO_CLASSES.get(d[5], f'unknown-{d[5]}') for d in detections]
                             print(f"Detected {len(detections)} objects: {detected_classes}")
+                        else:
+                            print("No detections found above threshold")
                         
                     except Exception as e:
                         print(f"Error during detection: {e}")
