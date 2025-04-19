@@ -65,13 +65,14 @@ model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # YOLO11s mod
 DETECTION_THRESHOLD = 0.30  # Confidence threshold for detections (lowered from 0.40 for better recall)
 MODEL_INPUT_SIZE = (640, 640)  # YOLOv11 input size
 CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
-RELAY_SQUIRT_DURATION = 0.2  # Duration to activate squirt relay
-RELAY_SQUIRT_COOLDOWN = 1.0  # Cooldown period for squirt relay
+RELAY_SQUIRT_DURATION = 0.2  # Duration to activate squirt relay in seconds
+RELAY_SQUIRT_COOLDOWN = 1.0  # Cooldown period for squirt relay in seconds
+RELAY_HYSTERESIS_TIME = 0.5  # Minimum time between relay state changes (seconds)
 INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
 FRAME_SKIP = 3  # Process only every Nth frame for inference (higher = better FPS but less responsive)
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 640  # Updated to match model input size for better accuracy
-FPS = 15  # Target FPS
+FPS = 30  # Target FPS (updated to match VIDEO_FPS)
 DEBUG_MODE = True  # Enable for debugging relay issues
 VERBOSE_OUTPUT = False  # Reduce console output
 SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
@@ -83,7 +84,7 @@ RECORD_VIDEO = True  # Enable video recording
 VIDEO_OUTPUT_DIR = "recordings"  # Directory to save videos
 VIDEO_MAX_LENGTH = 600  # Maximum video length in seconds (10 minutes)
 VIDEO_CODEC = cv2.VideoWriter_fourcc(*'mp4v')  # Use MP4 codec
-VIDEO_FPS = 15  # FPS for the recorded video
+VIDEO_FPS = 30  # FPS for the recorded video (updated to match record_test_video.py)
 VIDEO_RESOLUTION = (640, 640)  # Resolution for the recorded video
 
 # Optimized camera settings for better detection in varying light conditions
@@ -97,7 +98,7 @@ CAMERA_SETTINGS = {
     "Brightness": 0.2,          # Increased brightness for better illumination
     "Contrast": 1.1,            # Slightly increased contrast for better visibility
     "Saturation": 1.1,          # Slightly increased saturation for better color
-    "FrameRate": FPS,           # Set desired frame rate
+    "FrameRate": VIDEO_FPS,     # Set desired frame rate (using VIDEO_FPS for consistency)
     "AeConstraintMode": 0,      # Normal constraint mode
     "AwbMode": 1,               # Auto white balance mode (1 is typically auto)
     "ExposureValue": 0.5        # Positive EV compensation to improve brightness
@@ -183,7 +184,6 @@ last_relay_change_time = {
     RELAY_PINS['left']: 0,
     RELAY_PINS['right']: 0
 }
-RELAY_HYSTERESIS_TIME = 0.5  # Minimum time between relay state changes (seconds)
 
 # Sound effects for development mode
 SOUND_FILES = [
