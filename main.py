@@ -94,14 +94,14 @@ CAMERA_SETTINGS = {
     "AeExposureMode": 0,        # Normal exposure mode
     "AeMeteringMode": 0,        # Center-weighted metering
     "ExposureTime": 0,          # Let auto-exposure handle it
-    "AnalogueGain": 1.5,        # Increased gain for better low-light performance
-    "Brightness": 0.2,          # Increased brightness for better illumination
-    "Contrast": 1.1,            # Slightly increased contrast for better visibility
+    "AnalogueGain": 1.0,        # Reduced gain to prevent washout (was 1.5)
+    "Brightness": 0.0,          # Reduced brightness to prevent washout (was 0.2)
+    "Contrast": 1.3,            # Increased contrast for better definition (was 1.1)
     "Saturation": 1.1,          # Slightly increased saturation for better color
     "FrameRate": VIDEO_FPS,     # Set desired frame rate (using VIDEO_FPS for consistency)
     "AeConstraintMode": 0,      # Normal constraint mode
     "AwbMode": 1,               # Auto white balance mode (1 is typically auto)
-    "ExposureValue": 0.5        # Positive EV compensation to improve brightness
+    "ExposureValue": 0.0        # Reduced EV compensation to prevent overexposure (was 0.5)
 }
 
 # Cat class names
@@ -167,11 +167,15 @@ COLOR_NAMES = {
     'unknown': (255, 255, 255)  # White for unknown cats
 }
 
-# Global variables
+# Global variables for tracking
 last_squirt_activation = 0
 last_action = None
 last_action_time = 0
 last_valid_overlay = None  # Stores the last valid image overlay from the model
+last_detection_time = time.time()  # Initialize to current time to prevent immediate reset
+current_position = 0       # Current tracking position: -5 (far left) to +5 (far right), 0 is center
+MAX_POSITION = 5           # Maximum number of positions left/right of center
+POSITION_RESET_TIME = 10.0 # Time in seconds before resetting to center position
 
 # Cache for relay states to prevent unnecessary toggling
 relay_state_cache = {
@@ -965,7 +969,7 @@ def create_new_video_writer(video_writer):
     # Then create a new one
     return init_video_writer()
 
-def draw_relay_status(frame, active_relays):
+def draw_relay_status(frame, active_relays, current_position=0, max_position=5):
     """Draw relay status indicators on the frame"""
     height, width = frame.shape[:2]
     
@@ -994,10 +998,55 @@ def draw_relay_status(frame, active_relays):
     cv2.putText(frame, right_status, (width - 170, y_offset), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     
+    # Draw position tracker at bottom of frame
+    position_bar_width = 300
+    position_bar_height = 30
+    position_bar_x = (width - position_bar_width) // 2
+    position_bar_y = height - 50
+    
+    # Draw background bar
+    cv2.rectangle(frame, 
+                 (position_bar_x, position_bar_y), 
+                 (position_bar_x + position_bar_width, position_bar_y + position_bar_height), 
+                 (50, 50, 50), -1)
+    
+    # Calculate position marker location
+    segments = 2 * max_position + 1
+    segment_width = position_bar_width / segments
+    position_x = int(position_bar_x + (current_position + max_position) * segment_width)
+    
+    # Draw center line
+    center_x = position_bar_x + position_bar_width // 2
+    cv2.line(frame, 
+            (center_x, position_bar_y), 
+            (center_x, position_bar_y + position_bar_height), 
+            (200, 200, 200), 2)
+    
+    # Draw position marker
+    marker_radius = 10
+    marker_color = (0, 255, 255)  # Yellow
+    cv2.circle(frame, 
+              (position_x, position_bar_y + position_bar_height // 2), 
+              marker_radius, marker_color, -1)
+    
+    # Draw position scale
+    for i in range(-max_position, max_position + 1):
+        tick_x = int(position_bar_x + (i + max_position) * segment_width)
+        cv2.line(frame, 
+                (tick_x, position_bar_y + position_bar_height), 
+                (tick_x, position_bar_y + position_bar_height - 10), 
+                (200, 200, 200), 1)
+        if i % 2 == 0:  # Only show every other number to avoid crowding
+            cv2.putText(frame, str(i), 
+                      (tick_x - 5, position_bar_y + position_bar_height + 20), 
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    
     return frame
 
 def process_actions(frame, detections, fps):
     """Process detections and take appropriate actions"""
+    global current_position, last_detection_time
+    
     frame_width = frame.shape[1]
     
     # Create a copy for drawing
@@ -1045,10 +1094,45 @@ def process_actions(frame, detections, fps):
     if frame_counter == 0:
         cleanup_old_frames()
     
+    # Check if we need to reset position after no detections
+    current_time = time.time()
+    time_since_last_detection = current_time - last_detection_time
+    
+    # Add position indicator to frame
+    position_text = f"Position: {current_position}/{MAX_POSITION}"
+    cv2.rectangle(annotated_frame, (width - 250, height - 40), (width, height), (0, 0, 0), -1)
+    cv2.putText(annotated_frame, position_text, (width - 240, height - 10), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    # Reset to center if no detections for POSITION_RESET_TIME
+    if time_since_last_detection > POSITION_RESET_TIME and current_position != 0:
+        if DEBUG_MODE:
+            print(f"No detections for {time_since_last_detection:.1f}s, resetting to center from position {current_position}")
+        
+        # Move back to center in steps
+        if current_position > 0:
+            current_position -= 1
+            active_relays['left'] = True
+            if not DEV_MODE:
+                set_relay(RELAY_PIN_LEFT, True)
+                set_relay(RELAY_PIN_RIGHT, False)
+        elif current_position < 0:
+            current_position += 1
+            active_relays['right'] = True
+            if not DEV_MODE:
+                set_relay(RELAY_PIN_LEFT, False)
+                set_relay(RELAY_PIN_RIGHT, True)
+                
+        # Sleep briefly to allow movement to take effect
+        time.sleep(0.1)
+    
     # Process detections if we have any
     if len(detections) > 0:
         if VERBOSE_OUTPUT:
             print(f"Detected {len(detections)} objects")
+        
+        # Update last detection time
+        last_detection_time = current_time
         
         # Save detection frame periodically
         if frame_counter == 0:
@@ -1063,30 +1147,36 @@ def process_actions(frame, detections, fps):
         object_center_x = (x1 + x2) / 2
         relative_position = (object_center_x / frame_width) - 0.5
         
-        # Set relay states based on object position
+        # Set relay states based on object position and current tracking position
         if not DEV_MODE:
             # Always activate squirt relay for any detection
             active_relays['squirt'] = True
             set_relay(RELAY_PINS['squirt'], True)
             
-            if relative_position < -CENTER_THRESHOLD:
-                # Object is on the left side
+            # Incremental position tracking
+            if relative_position < -CENTER_THRESHOLD and current_position > -MAX_POSITION:
+                # Object is on the left side, move left if not at max position
+                current_position -= 1
                 active_relays['left'] = True
                 if DEBUG_MODE and set_relay(RELAY_PIN_LEFT, True):
-                    print("Cat on LEFT side - activating LEFT relay")
+                    print(f"Cat on LEFT side - moving left to position {current_position}")
                 set_relay(RELAY_PIN_RIGHT, False)
-            elif relative_position > CENTER_THRESHOLD:
-                # Object is on the right side
+            elif relative_position > CENTER_THRESHOLD and current_position < MAX_POSITION:
+                # Object is on the right side, move right if not at max position
+                current_position += 1
                 active_relays['right'] = True
                 set_relay(RELAY_PIN_LEFT, False)
                 if DEBUG_MODE and set_relay(RELAY_PIN_RIGHT, True):
-                    print("Cat on RIGHT side - activating RIGHT relay")
+                    print(f"Cat on RIGHT side - moving right to position {current_position}")
             else:
-                # Object is centered
+                # Object is centered or we're at max position in the needed direction
                 set_relay(RELAY_PIN_LEFT, False)
                 set_relay(RELAY_PIN_RIGHT, False)
                 if DEBUG_MODE:
-                    print("Cat in CENTER - directional relays OFF")
+                    if abs(relative_position) <= CENTER_THRESHOLD:
+                        print(f"Cat in CENTER - holding position {current_position}")
+                    else:
+                        print(f"At max position {current_position}, can't move further")
         
         # Process each detection for display
         for detection in detections:
@@ -1140,7 +1230,7 @@ def process_actions(frame, detections, fps):
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
         
         # Add position value
-        pos_text = f"Position: {relative_position:.2f}"
+        pos_text = f"Rel Pos: {relative_position:.2f}"
         cv2.putText(annotated_frame, pos_text, (10, height - 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                     
@@ -1151,16 +1241,14 @@ def process_actions(frame, detections, fps):
             if DEBUG_MODE:
                 print(f"Saved annotated detection image to {detection_filename}")
     else:
-        # No detections found, turn off all relays
+        # No detections found
         if not DEV_MODE:
-            # Turn off relays when no detections are found
-            # Only print debug messages if the relay state actually changes
+            # Turn off squirt relay when no detections
             if set_relay(RELAY_PINS['squirt'], False) and DEBUG_MODE:
                 print("No detections - squirt relay OFF")
-            if set_relay(RELAY_PIN_LEFT, False) and DEBUG_MODE:
-                print("No detections - left relay OFF")
-            if set_relay(RELAY_PIN_RIGHT, False) and DEBUG_MODE:
-                print("No detections - right relay OFF")
+            
+            # Leave the left/right relays in their current state for stepped movement
+            # They will be handled by the reset logic above if needed
     
     # Add timestamp
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1168,7 +1256,7 @@ def process_actions(frame, detections, fps):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     # Draw relay status on frame
-    annotated_frame = draw_relay_status(annotated_frame, active_relays)
+    annotated_frame = draw_relay_status(annotated_frame, active_relays, current_position, MAX_POSITION)
     
     return annotated_frame
 
