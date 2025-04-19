@@ -63,6 +63,7 @@ RELAY_ACTIVE_LOW = True
 RELAY_NORMALLY_CLOSED = False
 SQUIRT_RELAY_ON_STATE = GPIO.HIGH if not DEV_MODE else 1
 SQUIRT_RELAY_OFF_STATE = GPIO.LOW if not DEV_MODE else 0
+RELAY_SQUIRT_DURATION = 0.2  # Duration to activate squirt relay in seconds
 
 # Test duration settings
 TEST_DURATION = 30  # Duration for each test phase in seconds (increased from 15s)
@@ -232,7 +233,21 @@ def load_model():
                 zoo_url="degirum/public"
             )
             
-        print(f"Model loaded successfully")
+        # Print model info for debugging
+        print(f"Model loaded successfully: {model}")
+        print(f"Model class: {model.__class__.__name__}")
+        
+        # List model attributes for debugging
+        print("Model attributes:")
+        for attr in dir(model):
+            if not attr.startswith('_'):  # Skip private attributes
+                try:
+                    value = getattr(model, attr)
+                    if not callable(value):  # Skip methods
+                        print(f"  {attr}: {value}")
+                except Exception as e:
+                    print(f"  {attr}: Error accessing - {e}")
+        
         return model
     except Exception as e:
         print(f"Failed to load model: {e}")
@@ -275,60 +290,137 @@ def process_detections(results):
         return []
     
     try:
-        # Check for valid results structure
-        if hasattr(results, 'results') and results.results:
-            # Process detections from the results
-            for output in results.results:
-                if 'data' not in output:
-                    continue
-                
-                # Extract detection data and convert to usable format
-                boxes = []
-                scores = []
-                class_ids = []
-                
-                # DeGirum outputs are often in YOLO format (normalized)
-                data = output['data']
-                
-                # The data format can vary - try to extract all potential boxes
-                if isinstance(data, np.ndarray):
-                    # Reshape data if necessary
-                    if len(data.shape) > 2:
-                        data = data.reshape(-1, data.shape[-1])
+        # Print raw results for debugging
+        print(f"Raw results type: {type(results)}")
+        if hasattr(results, 'results'):
+            print(f"Results has 'results' attribute with {len(results.results)} items")
+            
+        # Check if the format is a direct detection array (common in DeGirum)
+        if isinstance(results, dict) and 'detections' in results:
+            # Some models return a dictionary with a 'detections' key
+            raw_detections = results['detections']
+            
+            for det in raw_detections:
+                if 'bbox' in det and 'confidence' in det and 'class_id' in det:
+                    x1, y1, x2, y2 = det['bbox']
+                    score = det['confidence']
+                    class_id = det['class_id']
                     
-                    # Yolo format: [x, y, w, h, confidence, class_id, ...]
-                    for box_data in data:
-                        if len(box_data) >= 6:  # Make sure there's at least 6 elements
-                            if box_data[4] >= DETECTION_THRESHOLD:  # Check confidence
-                                # Convert to x1,y1,x2,y2 format
-                                x, y, w, h = box_data[0], box_data[1], box_data[2], box_data[3]
+                    # Only accept detections for cats or dogs
+                    if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+                        # Convert to integers and ensure within frame bounds
+                        x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                        x1 = max(0, min(FRAME_WIDTH-1, x1))
+                        y1 = max(0, min(FRAME_HEIGHT-1, y1))
+                        x2 = max(0, min(FRAME_WIDTH-1, x2))
+                        y2 = max(0, min(FRAME_HEIGHT-1, y2))
+                        
+                        detections.append((x1, y1, x2, y2, score, class_id))
+            
+            return detections
+                
+        # Standard DeGirum output format
+        if hasattr(results, 'results') and results.results:
+            print("Processing standard DeGirum results format")
+            
+            # Print each result structure for debugging
+            for i, output in enumerate(results.results):
+                print(f"Output {i} keys: {output.keys() if isinstance(output, dict) else 'not a dict'}")
+                if isinstance(output, dict) and 'data' in output:
+                    data_shape = output['data'].shape if hasattr(output['data'], 'shape') else 'no shape'
+                    print(f"  Data shape: {data_shape}")
+                    if hasattr(output['data'], 'shape') and len(output['data'].shape) > 0:
+                        print(f"  First few data elements: {output['data'].flatten()[:10]}")
+            
+            # Some models output detection boxes directly
+            for output in results.results:
+                if 'detections' in output:
+                    for det in output['detections']:
+                        if 'bbox' in det and 'score' in det and 'class_id' in det:
+                            x1, y1, x2, y2 = det['bbox']
+                            score = det['score']
+                            class_id = det['class_id']
+                            
+                            if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+                                x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                                detections.append((x1, y1, x2, y2, score, class_id))
+            
+            # YOLO-style output format
+            for output in results.results:
+                if isinstance(output, dict) and 'data' in output:
+                    data = output['data']
+                    
+                    # Handle different data formats
+                    if isinstance(data, np.ndarray):
+                        # Handle different array shapes
+                        if len(data.shape) == 4:  # [batch, grid_h, grid_w, values]
+                            data = data.reshape(-1, data.shape[-1])
+                        elif len(data.shape) == 3:  # [grid_h, grid_w, values]
+                            data = data.reshape(-1, data.shape[-1])
+                        
+                        # Different models may have different formats for the data
+                        # Try parsing as: [x_center, y_center, width, height, objectness, class_scores...]
+                        if data.shape[1] >= 6:  # Need at least 6 values per detection
+                            for box_data in data:
+                                # Check if there are class scores
+                                objectness = box_data[4]
                                 
-                                # For normalized coordinates (0-1)
-                                if 0 <= x <= 1 and 0 <= y <= 1 and 0 <= w <= 1 and 0 <= h <= 1:
-                                    # Convert normalized coordinates to pixel values
-                                    x *= FRAME_WIDTH
-                                    y *= FRAME_HEIGHT
-                                    w *= FRAME_WIDTH
-                                    h *= FRAME_HEIGHT
+                                if objectness >= DETECTION_THRESHOLD:
+                                    # Get class ID and score
+                                    class_scores = box_data[5:]
+                                    class_id = np.argmax(class_scores)
+                                    score = float(class_scores[class_id])
+                                    
+                                    # Only process if it's a cat or dog with high enough confidence
+                                    if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+                                        # Convert center/width/height to x1,y1,x2,y2
+                                        x_center, y_center, width, height = box_data[0:4]
+                                        
+                                        # Convert normalized coordinates (0-1) if needed
+                                        if 0 <= x_center <= 1 and 0 <= y_center <= 1 and 0 <= width <= 1 and 0 <= height <= 1:
+                                            x_center *= FRAME_WIDTH
+                                            y_center *= FRAME_HEIGHT
+                                            width *= FRAME_WIDTH
+                                            height *= FRAME_HEIGHT
+                                        
+                                        # Calculate corner coordinates
+                                        x1 = int(x_center - width/2)
+                                        y1 = int(y_center - height/2)
+                                        x2 = int(x_center + width/2)
+                                        y2 = int(y_center + height/2)
+                                        
+                                        # Enforce image boundaries
+                                        x1 = max(0, x1)
+                                        y1 = max(0, y1)
+                                        x2 = min(FRAME_WIDTH, x2)
+                                        y2 = min(FRAME_HEIGHT, y2)
+                                        
+                                        detections.append((x1, y1, x2, y2, score, class_id))
+                        
+                        # Alternative format: each row is already [x1, y1, x2, y2, score, class_id]
+                        elif data.shape[1] == 6:
+                            for box_data in data:
+                                x1, y1, x2, y2, score, class_id = box_data
                                 
-                                # Calculate corner coordinates
-                                x1 = int(x - w/2)
-                                y1 = int(y - h/2)
-                                x2 = int(x + w/2)
-                                y2 = int(y + h/2)
+                                # Convert class_id to int and score to float
+                                class_id = int(class_id)
+                                score = float(score)
                                 
-                                # Enforce image boundaries
-                                x1 = max(0, x1)
-                                y1 = max(0, y1)
-                                x2 = min(FRAME_WIDTH, x2)
-                                y2 = min(FRAME_HEIGHT, y2)
-                                
-                                # Extract confidence and class_id
-                                score = float(box_data[4])
-                                class_id = int(box_data[5])
-                                
-                                # Only add if class is in our list of classes to detect
-                                if class_id in CLASSES_TO_DETECT:
+                                if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+                                    # Convert to pixel values if normalized
+                                    if 0 <= x1 <= 1 and 0 <= y1 <= 1 and 0 <= x2 <= 1 and 0 <= y2 <= 1:
+                                        x1 *= FRAME_WIDTH
+                                        y1 *= FRAME_HEIGHT
+                                        x2 *= FRAME_WIDTH
+                                        y2 *= FRAME_HEIGHT
+                                    
+                                    # Convert to integers and ensure within frame bounds
+                                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                                    x1 = max(0, min(FRAME_WIDTH-1, x1))
+                                    y1 = max(0, min(FRAME_HEIGHT-1, y1))
+                                    x2 = max(0, min(FRAME_WIDTH-1, x2))
+                                    y2 = max(0, min(FRAME_HEIGHT-1, y2))
+                                    
                                     detections.append((x1, y1, x2, y2, score, class_id))
         
     except Exception as e:
@@ -336,19 +428,29 @@ def process_detections(results):
         import traceback
         traceback.print_exc()
     
+    # Print the number of valid detections found
+    if detections:
+        print(f"Found {len(detections)} valid detections in the results")
+    
     return detections
 
 def activate_relay(pin, duration=0.1):
     """Activate a relay for the specified duration"""
     if not DEV_MODE:
         try:
+            # Debug output
+            print(f"Activating relay on pin {pin} for {duration:.2f} seconds")
+            
             # Turn ON the relay
             if pin == RELAY_PINS['squirt']:
                 # Squirt relay: HIGH = ON, LOW = OFF
                 GPIO.output(pin, SQUIRT_RELAY_ON_STATE)
+                print(f"  Set squirt relay to ON state: {SQUIRT_RELAY_ON_STATE}")
             else:
                 # Standard relays: active-low behavior (LOW = ON, HIGH = OFF)
-                GPIO.output(pin, GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH)
+                active_state = GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH
+                GPIO.output(pin, active_state)
+                print(f"  Set relay to active state: {active_state}")
             
             # Wait for the specified duration
             time.sleep(duration)
@@ -356,8 +458,11 @@ def activate_relay(pin, duration=0.1):
             # Turn OFF the relay
             if pin == RELAY_PINS['squirt']:
                 GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
+                print(f"  Set squirt relay to OFF state: {SQUIRT_RELAY_OFF_STATE}")
             else:
-                GPIO.output(pin, GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)
+                inactive_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+                GPIO.output(pin, inactive_state)
+                print(f"  Set relay to inactive state: {inactive_state}")
                 
             return True
         except Exception as e:
@@ -369,26 +474,48 @@ def activate_relay(pin, duration=0.1):
         time.sleep(duration)
         return True
 
+def test_relays():
+    """Test all relays to ensure they're working properly"""
+    if DEV_MODE:
+        print("Cannot test relays in development mode")
+        return
+        
+    print("\nTesting all relays...")
+    
+    # Test each relay with a short activation
+    for name, pin in RELAY_PINS.items():
+        print(f"Testing {name} relay (pin {pin})...")
+        activate_relay(pin, 0.5)
+        time.sleep(0.5)  # Wait between relay activations
+    
+    print("Relay test complete\n")
+
 def handle_detection(bbox, frame_width, activation_duration):
     """Handle detection and activate appropriate relays to center the object"""
     x1, y1, x2, y2 = map(int, bbox)
     center_x = (x1 + x2) / 2
     relative_position = (center_x / frame_width) - 0.5  # -0.5 to 0.5 range
     
+    # Optionally trigger the squirt relay on every detection for testing
+    TEST_SQUIRT = False  # Set to True to test the squirt relay
+    if TEST_SQUIRT:
+        print(f"TEST MODE: Triggering squirt relay for {RELAY_SQUIRT_DURATION:.2f} seconds")
+        activate_relay(RELAY_PINS['squirt'], RELAY_SQUIRT_DURATION)
+    
     # Activate relay based on object position
     if relative_position < -CENTER_THRESHOLD:
         # Object is on the left side, activate right relay to move camera left
-        print(f"Object on left side, moving right for {activation_duration:.2f} seconds")
+        print(f"Object on left side (position: {relative_position:.2f}), moving right for {activation_duration:.2f} seconds")
         activate_relay(RELAY_PINS['right'], activation_duration)
         return 'right', relative_position
     elif relative_position > CENTER_THRESHOLD:
         # Object is on the right side, activate left relay to move camera right
-        print(f"Object on right side, moving left for {activation_duration:.2f} seconds")
+        print(f"Object on right side (position: {relative_position:.2f}), moving left for {activation_duration:.2f} seconds")
         activate_relay(RELAY_PINS['left'], activation_duration)
         return 'left', relative_position
     else:
         # Object is already centered
-        print("Object centered, no movement needed")
+        print(f"Object centered (position: {relative_position:.2f}), no movement needed")
         return 'center', relative_position
 
 def draw_tracking_info(frame, detections, phase, activation_duration, action=None, relative_position=None):
@@ -532,6 +659,8 @@ def main():
         # Setup GPIO if not in dev mode
         if not DEV_MODE:
             setup_gpio()
+            # Test relays to ensure they're working properly
+            test_relays()
         
         # Load model
         model = load_model()
@@ -539,6 +668,8 @@ def main():
             print("Warning: No object detection model available. Detection will not work.")
         else:
             print(f"Model input shape: {model.input_shape if hasattr(model, 'input_shape') else 'unknown'}")
+            if hasattr(model, 'output_shape'):
+                print(f"Model output shape: {model.output_shape}")
         
         # Run tests for each phase
         for phase in range(NUM_TEST_PHASES):
@@ -582,11 +713,21 @@ def main():
                         inference_time = time.time() - start_time
                         print(f"Inference time: {inference_time:.3f}s")
                         
+                        # Try alternative method with named inputs if previous call fails to detect
+                        if hasattr(results, 'results') and len(results.results) > 0:
+                            print("Using results from standard model call")
+                        else:
+                            print("Trying alternative prediction method...")
+                            # Some models require named inputs
+                            results = model.predict({"input": input_frame})
+                            print(f"Alternative method results type: {type(results)}")
+                            
                         # Process detection results
                         detections = process_detections(results)
                         
                         if detections:
-                            print(f"Detected {len(detections)} objects: {[COCO_CLASSES.get(d[5], 'unknown') for d in detections]}")
+                            detected_classes = [COCO_CLASSES.get(d[5], f'unknown-{d[5]}') for d in detections]
+                            print(f"Detected {len(detections)} objects: {detected_classes}")
                         
                     except Exception as e:
                         print(f"Error during detection: {e}")
