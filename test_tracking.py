@@ -61,8 +61,8 @@ RELAY_PINS = {
 # Important relay configuration
 RELAY_ACTIVE_LOW = True
 RELAY_NORMALLY_CLOSED = False
-SQUIRT_RELAY_ON_STATE = 1  # GPIO.HIGH
-SQUIRT_RELAY_OFF_STATE = 0  # GPIO.LOW
+SQUIRT_RELAY_ON_STATE = GPIO.HIGH if not DEV_MODE else 1
+SQUIRT_RELAY_OFF_STATE = GPIO.LOW if not DEV_MODE else 0
 
 # Test duration settings
 TEST_DURATION = 30  # Duration for each test phase in seconds (increased from 15s)
@@ -98,6 +98,30 @@ COLORS = [
     (255, 0, 255),   # Magenta
     (0, 255, 255),   # Yellow
 ]
+
+def resize_image_letterbox(image, target_shape=(640, 640)):
+    """
+    Resizes an image with letterboxing to preserve aspect ratio.
+    """
+    ih, iw = image.shape[:2]
+    h, w = target_shape
+    scale = min(w/iw, h/ih)
+    
+    # Resize image preserving aspect ratio
+    nw, nh = int(iw * scale), int(ih * scale)
+    image = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    
+    # Create empty target image
+    new_image = np.zeros((h, w, 3), dtype=np.uint8)
+    
+    # Compute letterbox margins
+    top = (h - nh) // 2
+    left = (w - nw) // 2
+    
+    # Copy resized image to center of target image
+    new_image[top:top+nh, left:left+nw, :] = image
+    
+    return new_image, scale, top, left
 
 def setup_camera():
     """Setup camera for capture"""
@@ -180,14 +204,15 @@ def setup_gpio():
             raise
 
 def load_model():
-    """Load detection model"""
+    """Load detection model - using same approach as main.py"""
     if not DEGIRUM_AVAILABLE:
         print("DeGirum not available, using OpenCV DNN instead")
         return None
         
     try:
         print("Loading DeGirum model...")
-        model_name = "yolov8n_coco"
+        # Use the same model name as in main.py
+        model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
         
         # Try to load from local zoo first
         zoo_path = "/home/pi5/degirum_model_zoo"
@@ -196,17 +221,15 @@ def load_model():
             model = dg.load_model(
                 model_name=model_name,
                 inference_host_address="@local",
-                zoo_url=zoo_path,
-                output_confidence_threshold=DETECTION_THRESHOLD
+                zoo_url=zoo_path
             )
         else:
             # Fall back to public model
-            print("Local model zoo not found, using public model")
+            print("Local model zoo not found, using yolov8n_coco from public model")
             model = dg.load_model(
-                model_name=model_name,
+                model_name="yolov8n_coco",
                 inference_host_address="@local",
-                zoo_url="degirum/public",
-                output_confidence_threshold=DETECTION_THRESHOLD
+                zoo_url="degirum/public"
             )
             
         print(f"Model loaded successfully")
@@ -244,85 +267,69 @@ def get_frame(camera):
             print(f"Failed to capture frame from Pi camera: {e}")
             raise
 
-def process_detections(frame, results, model):
+def process_detections(results):
     """Process detection results and return detections list"""
     detections = []
     
-    if model is None:
-        # Fallback detection not implemented in this script
+    if results is None:
         return []
-        
+    
     try:
-        # YOLO model returns results in different formats depending on the version
+        # Check for valid results structure
         if hasattr(results, 'results') and results.results:
-            result_list = results.results
-        elif hasattr(results, 'results') and isinstance(results.results, list):
-            result_list = results.results
-        elif isinstance(results, list):
-            result_list = results
-        else:
-            result_list = []
-        
-        # Process detections from the result list
-        for detection in result_list:
-            try:
-                # Try multiple approaches to extract bounding box information
-                x1, y1, x2, y2, score, class_id = None, None, None, None, None, None
-                
-                # Method 1: Direct dictionary access
-                if isinstance(detection, dict):
-                    if 'bbox' in detection:
-                        bbox = detection['bbox']
-                        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                            x1, y1, x2, y2 = map(int, bbox)
-                        
-                        score = float(detection.get('score', detection.get('confidence', 0.0)))
-                        class_id = int(detection.get('category_id', detection.get('class_id', 0)))
-                
-                # Method 2: Object attribute access
-                elif hasattr(detection, 'bbox'):
-                    bbox = detection.bbox
-                    
-                    # Handle different bbox formats
-                    if hasattr(bbox, 'x1') and hasattr(bbox, 'y1') and hasattr(bbox, 'x2') and hasattr(bbox, 'y2'):
-                        x1, y1, x2, y2 = int(bbox.x1), int(bbox.y1), int(bbox.x2), int(bbox.y2)
-                    elif hasattr(bbox, '__getitem__') and len(bbox) == 4:
-                        x1, y1, x2, y2 = map(int, bbox)
-                    
-                    # Get score and class ID
-                    if hasattr(detection, 'score'):
-                        score = float(detection.score)
-                    elif hasattr(detection, 'confidence'):
-                        score = float(detection.confidence)
-                    
-                    if hasattr(detection, 'class_id'):
-                        class_id = int(detection.class_id)
-                    elif hasattr(detection, 'category_id'):
-                        class_id = int(detection.category_id)
-                
-                # Skip invalid or incomplete detections
-                if None in (x1, y1, x2, y2, score, class_id):
+            # Process detections from the results
+            for output in results.results:
+                if 'data' not in output:
                     continue
                 
-                # Filter for cat and dog classes only
-                if class_id not in CLASSES_TO_DETECT:
-                    continue
+                # Extract detection data and convert to usable format
+                boxes = []
+                scores = []
+                class_ids = []
                 
-                # Add detection if it meets threshold
-                if score >= DETECTION_THRESHOLD:
-                    # Make sure coordinates are within image bounds
-                    height, width = frame.shape[:2]
-                    x1 = max(0, min(width-1, x1))
-                    y1 = max(0, min(height-1, y1))
-                    x2 = max(0, min(width-1, x2))
-                    y2 = max(0, min(height-1, y2))
+                # DeGirum outputs are often in YOLO format (normalized)
+                data = output['data']
+                
+                # The data format can vary - try to extract all potential boxes
+                if isinstance(data, np.ndarray):
+                    # Reshape data if necessary
+                    if len(data.shape) > 2:
+                        data = data.reshape(-1, data.shape[-1])
                     
-                    # Only add if the box has reasonable size
-                    if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
-                        detections.append((x1, y1, x2, y2, score, class_id))
-            
-            except Exception as e:
-                print(f"Error processing detection: {e}")
+                    # Yolo format: [x, y, w, h, confidence, class_id, ...]
+                    for box_data in data:
+                        if len(box_data) >= 6:  # Make sure there's at least 6 elements
+                            if box_data[4] >= DETECTION_THRESHOLD:  # Check confidence
+                                # Convert to x1,y1,x2,y2 format
+                                x, y, w, h = box_data[0], box_data[1], box_data[2], box_data[3]
+                                
+                                # For normalized coordinates (0-1)
+                                if 0 <= x <= 1 and 0 <= y <= 1 and 0 <= w <= 1 and 0 <= h <= 1:
+                                    # Convert normalized coordinates to pixel values
+                                    x *= FRAME_WIDTH
+                                    y *= FRAME_HEIGHT
+                                    w *= FRAME_WIDTH
+                                    h *= FRAME_HEIGHT
+                                
+                                # Calculate corner coordinates
+                                x1 = int(x - w/2)
+                                y1 = int(y - h/2)
+                                x2 = int(x + w/2)
+                                y2 = int(y + h/2)
+                                
+                                # Enforce image boundaries
+                                x1 = max(0, x1)
+                                y1 = max(0, y1)
+                                x2 = min(FRAME_WIDTH, x2)
+                                y2 = min(FRAME_HEIGHT, y2)
+                                
+                                # Extract confidence and class_id
+                                score = float(box_data[4])
+                                class_id = int(box_data[5])
+                                
+                                # Only add if class is in our list of classes to detect
+                                if class_id in CLASSES_TO_DETECT:
+                                    detections.append((x1, y1, x2, y2, score, class_id))
         
     except Exception as e:
         print(f"Error processing detection results: {e}")
@@ -501,21 +508,14 @@ def cleanup_resources(camera):
     # Clean up GPIO
     if not DEV_MODE:
         try:
-            print("Cleaning up GPIO...")
             GPIO.cleanup()
-            print("GPIO cleaned up")
+            print("GPIO pins cleaned up")
         except Exception as e:
             print(f"Error cleaning up GPIO: {e}")
-    
-    print("All resources cleaned up")
 
 def signal_handler(sig, frame):
-    """Handle Ctrl+C signal"""
-    print("\nProgram terminated by user")
-    if 'camera' in globals() and camera is not None:
-        cleanup_resources(camera)
-    if 'video_writer' in globals() and video_writer is not None:
-        cleanup_video_writer(video_writer)
+    """Handle interrupt signals"""
+    print("\nInterrupt signal received, cleaning up...")
     sys.exit(0)
 
 def main():
@@ -535,6 +535,10 @@ def main():
         
         # Load model
         model = load_model()
+        if model is None:
+            print("Warning: No object detection model available. Detection will not work.")
+        else:
+            print(f"Model input shape: {model.input_shape if hasattr(model, 'input_shape') else 'unknown'}")
         
         # Run tests for each phase
         for phase in range(NUM_TEST_PHASES):
@@ -553,15 +557,41 @@ def main():
             while time.time() - phase_start_time < TEST_DURATION:
                 # Get frame from camera
                 frame = get_frame(camera)
+                orig_frame = frame.copy()
                 
                 # Run detection
+                detections = []
                 if model is not None:
-                    results = model.predict_batch([frame])
-                    results = next(results)
-                    detections = process_detections(frame, results, model)
-                else:
-                    # Fallback detection not implemented
-                    detections = []
+                    try:
+                        # Convert BGR to RGB for model input
+                        input_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        
+                        # Prepare model input (match the approach in main.py)
+                        # Resize with letterbox to match model input requirements
+                        input_frame, scale, pad_top, pad_left = resize_image_letterbox(
+                            input_frame, (640, 640)
+                        )
+                        
+                        # Add batch dimension if needed
+                        if hasattr(model, 'input_shape') and model.input_shape[0] == 1:
+                            input_frame = np.expand_dims(input_frame, axis=0)
+                            
+                        # Run inference with the model (direct call like in main.py)
+                        start_time = time.time()
+                        results = model(input_frame)
+                        inference_time = time.time() - start_time
+                        print(f"Inference time: {inference_time:.3f}s")
+                        
+                        # Process detection results
+                        detections = process_detections(results)
+                        
+                        if detections:
+                            print(f"Detected {len(detections)} objects: {[COCO_CLASSES.get(d[5], 'unknown') for d in detections]}")
+                        
+                    except Exception as e:
+                        print(f"Error during detection: {e}")
+                        import traceback
+                        traceback.print_exc()
                 
                 # Initialize action and relative position
                 action = None
@@ -578,15 +608,15 @@ def main():
                 
                 # Draw tracking information on frame
                 annotated_frame = draw_tracking_info(
-                    frame.copy(), detections, phase, activation_duration, action, relative_position
+                    orig_frame.copy(), detections, phase, activation_duration, action, relative_position
                 )
                 
                 # Record frame if video writer is available
                 if video_writer is not None:
                     video_writer.write(annotated_frame)
                 
-                # Display frame if not in headless mode
-                if not 'DISPLAY' not in os.environ:
+                # Display frame if not in headless mode and display is available
+                if 'DISPLAY' in os.environ:
                     cv2.imshow("Tracking Test", annotated_frame)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         break
