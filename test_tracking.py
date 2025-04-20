@@ -106,14 +106,20 @@ COLORS = [
 ]
 
 # Global tracking variables - add these near the top with other globals
-POSITION_RESET_TIME = 60.0  # Reset to center after 1 minute without detections (was 10 seconds)
-CURRENT_POSITION = 0  # Current tracking position: -5 (far left) to +5 (far right), 0 is center
-MAX_POSITION = 5
-POSITION_THRESHOLD = 0.05  # Minimum position change to trigger movement (reduces jitter)
-MOVEMENT_SMOOTHING = 0.5  # Smoothing factor for movement (0-1, higher = smoother)
+POSITION_RESET_TIME = 60.0  # Reset to center after 1 minute without detections
 LAST_DETECTION_TIME = time.time()  # Time of last detection
-LAST_MOVEMENT_TIME = 0  # Time of last movement
+
+# New zone-based tracking system
+TRACKING_ZONES = {
+    'far_left': {'range': (-1.0, -0.6), 'relay': 'right', 'duration': 0.20},
+    'left': {'range': (-0.6, -0.2), 'relay': 'right', 'duration': 0.10},
+    'center': {'range': (-0.2, 0.2), 'relay': None, 'duration': 0},
+    'right': {'range': (0.2, 0.6), 'relay': 'left', 'duration': 0.10},
+    'far_right': {'range': (0.6, 1.0), 'relay': 'left', 'duration': 0.20}
+}
+CURRENT_ZONE = 'center'  # Current tracking zone
 MOVEMENT_COOLDOWN = 0.5  # Minimum time between movements (seconds)
+LAST_MOVEMENT_TIME = 0  # Time of last movement
 
 def resize_image_letterbox(image, target_shape=(640, 640)):
     """
@@ -527,8 +533,8 @@ def test_relays():
     
     print("Relay test complete\n")
 
-def calculate_target_position(detections, frame_width):
-    """Calculate the target position based on detected objects"""
+def calculate_object_zone(detections, frame_width):
+    """Calculate which zone the detected object is in"""
     if not detections:
         return None
     
@@ -539,126 +545,72 @@ def calculate_target_position(detections, frame_width):
     # Calculate center point of detection
     center_x = (x1 + x2) / 2
     
-    # Convert to relative position (-0.5 to 0.5 range)
-    relative_position = (center_x / frame_width) - 0.5
+    # Calculate relative position (-1.0 to 1.0 range)
+    # We multiply by 2 to get the full -1 to 1 range
+    relative_position = ((center_x / frame_width) - 0.5) * 2
     
-    # Convert to position scale (-MAX_POSITION to +MAX_POSITION)
-    target_position = round(relative_position * (2 * MAX_POSITION))
+    # Determine which zone the object is in
+    for zone_name, zone_data in TRACKING_ZONES.items():
+        min_pos, max_pos = zone_data['range']
+        if min_pos <= relative_position <= max_pos:
+            return zone_name, relative_position
     
-    return target_position
-
-def update_tracking_position(target_position):
-    """Update tracking position with smoothing to avoid jerky movements"""
-    global CURRENT_POSITION, LAST_DETECTION_TIME, LAST_MOVEMENT_TIME
-    
-    # Update last detection time
-    LAST_DETECTION_TIME = time.time()
-    
-    # If no valid target, maintain current position
-    if target_position is None:
-        return CURRENT_POSITION
-    
-    # Check if enough time has passed since last movement
-    if time.time() - LAST_MOVEMENT_TIME < MOVEMENT_COOLDOWN:
-        return CURRENT_POSITION
-    
-    # Calculate position error
-    position_error = target_position - CURRENT_POSITION
-    
-    # Only move if the error exceeds the threshold
-    if abs(position_error) <= POSITION_THRESHOLD:
-        return CURRENT_POSITION
-    
-    # Apply smoothing to reduce jerkiness
-    # Move at most 1 position step at a time for smoothness
-    if position_error > 0:
-        new_position = CURRENT_POSITION + min(1, position_error * MOVEMENT_SMOOTHING)
+    # Failsafe for out-of-bounds values
+    if relative_position < -1.0:
+        return 'far_left', relative_position
     else:
-        new_position = CURRENT_POSITION + max(-1, position_error * MOVEMENT_SMOOTHING)
-    
-    # Ensure position stays within bounds
-    new_position = max(-MAX_POSITION, min(MAX_POSITION, new_position))
-    
-    # Only update if position has changed significantly
-    if abs(new_position - CURRENT_POSITION) >= 0.5:
-        CURRENT_POSITION = new_position
-        LAST_MOVEMENT_TIME = time.time()
-    
-    return CURRENT_POSITION
+        return 'far_right', relative_position
 
-def check_position_reset():
-    """Check if position should be reset to center due to inactivity"""
-    global CURRENT_POSITION, LAST_DETECTION_TIME
+def handle_detection(detections, frame_width, base_activation_duration):
+    """Handle detection and calculate appropriate movement using zone-based approach"""
+    global CURRENT_ZONE, LAST_DETECTION_TIME, LAST_MOVEMENT_TIME
     
-    # If no detection for POSITION_RESET_TIME, gradually move back to center
-    if time.time() - LAST_DETECTION_TIME > POSITION_RESET_TIME:
-        # Gradual reset - move 1 step toward center at a time
-        if CURRENT_POSITION > 0:
-            CURRENT_POSITION -= 0.5
-        elif CURRENT_POSITION < 0:
-            CURRENT_POSITION += 0.5
-        
-        return True
-    
-    return False
-
-def position_to_relay_action(position, activation_duration):
-    """Convert position to relay action"""
-    # Position is in range -MAX_POSITION to +MAX_POSITION
-    # Positive values mean object is on the right side (need to move left)
-    # Negative values mean object is on the left side (need to move right)
-    
-    # Calculate activation time proportional to position offset
-    # The further from center, the longer the activation
-    offset = abs(position)
-    duration = activation_duration * min(1.0, offset / 3.0)
-    
-    if position >= 1:  # Right side position (move left)
-        return 'left', duration
-    elif position <= -1:  # Left side position (move right)
-        return 'right', duration
-    else:
-        return 'center', 0
-
-def handle_detection(detections, frame_width, activation_duration):
-    """Handle detection and calculate appropriate movement"""
     # Optionally trigger the squirt relay on every detection for testing
     TEST_SQUIRT = False  # Set to True to test the squirt relay
     if TEST_SQUIRT and detections:
         print(f"TEST MODE: Triggering squirt relay for {RELAY_SQUIRT_DURATION:.2f} seconds")
         activate_relay(RELAY_PINS['squirt'], RELAY_SQUIRT_DURATION)
     
-    # Calculate target position based on detections
-    target_position = calculate_target_position(detections, frame_width)
+    # Calculate object zone based on detections
+    zone_info = calculate_object_zone(detections, frame_width)
     
-    # Check if we need to reset position due to inactivity
-    if target_position is None:
-        reset_happened = check_position_reset()
-        if reset_happened:
-            print(f"No detection for {POSITION_RESET_TIME:.1f}s, gradually resetting to center. Current position: {CURRENT_POSITION:.1f}")
+    if zone_info is not None:
+        detected_zone, relative_position = zone_info
+        LAST_DETECTION_TIME = time.time()
+        
+        # Only change zones if it's different and cooldown period has passed
+        if detected_zone != CURRENT_ZONE and time.time() - LAST_MOVEMENT_TIME >= MOVEMENT_COOLDOWN:
+            print(f"Object detected in {detected_zone} zone (position: {relative_position:.2f})")
+            
+            # Get the relay and duration for this zone
+            zone_data = TRACKING_ZONES[detected_zone]
+            relay_name = zone_data['relay']
+            # Use the fixed duration from the zone definition, not the base duration from the test phase
+            duration = zone_data['duration']
+            
+            # Take action if needed
+            if relay_name and duration > 0:
+                print(f"Moving {relay_name} for {duration:.2f}s (zone {detected_zone})")
+                activate_relay(RELAY_PINS[relay_name], duration)
+                LAST_MOVEMENT_TIME = time.time()
+            
+            # Update current zone
+            CURRENT_ZONE = detected_zone
+            
+            return relay_name if relay_name else 'center', relative_position
+        
+        return 'no_change', relative_position
     else:
-        # Update tracking position with smoothing
-        update_tracking_position(target_position)
-    
-    # Convert position to relay action
-    action, duration = position_to_relay_action(CURRENT_POSITION, activation_duration)
-    
-    # Take action if needed
-    if action == 'left':
-        print(f"Moving left for {duration:.2f}s (position {CURRENT_POSITION:.1f})")
-        if duration > 0:
-            activate_relay(RELAY_PINS['left'], duration)
-        return 'left', CURRENT_POSITION
-    elif action == 'right':
-        print(f"Moving right for {duration:.2f}s (position {CURRENT_POSITION:.1f})")
-        if duration > 0:
-            activate_relay(RELAY_PINS['right'], duration)
-        return 'right', CURRENT_POSITION
-    else:
-        print(f"Centered at position {CURRENT_POSITION:.1f}, no movement needed")
-        return 'center', CURRENT_POSITION
+        # Check if we need to reset position due to inactivity
+        if time.time() - LAST_DETECTION_TIME > POSITION_RESET_TIME:
+            if CURRENT_ZONE != 'center':
+                print(f"No detection for {POSITION_RESET_TIME:.1f}s, resetting to center")
+                CURRENT_ZONE = 'center'
+                return 'reset', 0.0
+        
+        return 'none', None
 
-def draw_tracking_info(frame, detections, phase, activation_duration, action=None, current_position=None):
+def draw_tracking_info(frame, detections, phase, activation_duration, action=None, relative_position=None):
     """Draw tracking information on the frame"""
     height, width = frame.shape[:2]
     
@@ -666,11 +618,27 @@ def draw_tracking_info(frame, detections, phase, activation_duration, action=Non
     center_x = width // 2
     cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
     
+    # Draw zone dividers
+    for zone_name, zone_data in TRACKING_ZONES.items():
+        if zone_name != 'far_right':  # Skip last zone boundary
+            # Convert zone boundary to pixel position
+            _, max_pos = zone_data['range']
+            boundary_x = int(center_x + (width / 2) * max_pos)
+            
+            # Different color for center zone boundaries
+            if zone_name == 'left' or zone_name == 'right':
+                color = (0, 200, 0)  # Green for center zone
+                thickness = 2
+            else:
+                color = (0, 0, 200)  # Red for outer zones
+                thickness = 1
+                
+            cv2.line(frame, (boundary_x, 0), (boundary_x, height), color, thickness)
+    
     # Draw position indicator
-    if current_position is not None:
+    if relative_position is not None:
         # Calculate position marker on screen
-        position_ratio = current_position / MAX_POSITION
-        position_x = int(center_x + (width / 2) * position_ratio * 0.8)  # 80% of half width
+        position_x = int(center_x + (width / 2) * relative_position)
         
         # Draw position marker
         cv2.circle(frame, (position_x, height - 30), 8, (0, 255, 255), -1)
@@ -678,27 +646,24 @@ def draw_tracking_info(frame, detections, phase, activation_duration, action=Non
         # Draw target zone
         cv2.rectangle(frame, (center_x - 20, height - 40), (center_x + 20, height - 20), (0, 255, 0), 2)
     
-    # Draw threshold lines
-    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
-    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
-    cv2.line(frame, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
-    cv2.line(frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
-    
     # Draw test phase information
     cv2.rectangle(frame, (0, 0), (width, 60), (0, 0, 0), -1)
     phase_text = f"Test Phase: {phase+1}/{NUM_TEST_PHASES}"
-    duration_text = f"Activation Duration: {activation_duration:.2f}s"
+    duration_text = f"Base Duration: {activation_duration:.2f}s"
     cv2.putText(frame, phase_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     cv2.putText(frame, duration_text, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     # Draw action information if available
     if action:
-        action_color = (0, 255, 0) if action == 'center' else (0, 0, 255)  # Green for centered, red for moving
-        cv2.rectangle(frame, (width - 230, 0), (width, 60), (0, 0, 0), -1)
+        action_color = (0, 255, 0) if action == 'center' or action == 'no_change' else (0, 0, 255)
+        cv2.rectangle(frame, (width - 300, 0), (width, 60), (0, 0, 0), -1)
+        
+        # Get current zone info
+        zone_text = f"Zone: {CURRENT_ZONE}"
         action_text = f"Action: {action.upper()}"
-        position_text = f"Position: {current_position:.1f}" if current_position is not None else ""
-        cv2.putText(frame, action_text, (width - 220, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, action_color, 2)
-        cv2.putText(frame, position_text, (width - 220, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        cv2.putText(frame, zone_text, (width - 290, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame, action_text, (width - 290, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, action_color, 2)
     
     # Draw detections
     for i, detection in enumerate(detections):
@@ -805,7 +770,7 @@ def signal_handler(sig, frame):
 
 def main():
     """Main function that runs the tracking tests"""
-    global CURRENT_POSITION, LAST_DETECTION_TIME
+    global CURRENT_ZONE, LAST_DETECTION_TIME
     
     try:
         # Register signal handler for graceful exit
@@ -865,7 +830,7 @@ def main():
                 print(f"Model output shape: {model.output_shape}")
         
         # Reset tracking variables
-        CURRENT_POSITION = 0
+        CURRENT_ZONE = 'center'
         LAST_DETECTION_TIME = time.time()
         
         # Run tests for each phase
@@ -873,7 +838,7 @@ def main():
             # Calculate activation duration for this phase
             activation_duration = BASE_DURATION + (phase * INCREMENT)
             print(f"\n=== Starting Test Phase {phase+1}/{NUM_TEST_PHASES} ===")
-            print(f"Activation duration: {activation_duration:.2f} seconds")
+            print(f"Base activation duration: {activation_duration:.2f} seconds")
             
             # Initialize video writer for this phase
             video_writer = init_video_writer(phase, activation_duration)
@@ -915,7 +880,7 @@ def main():
                         
                         # Process detection results using same approach as main.py
                         detections = []
-                        
+                
                         # Check if results is in expected format
                         if hasattr(results, 'results') and results.results:
                             result_list = results.results
@@ -1006,19 +971,17 @@ def main():
                         import traceback
                         traceback.print_exc()
                 
-                # Process detections and update tracking position
+                # Process detections with zone-based approach
                 if detections:
-                    # Handle detection with new approach
-                    action, current_position = handle_detection(detections, FRAME_WIDTH, activation_duration)
+                    # Handle detection using zone-based approach
+                    action, relative_position = handle_detection(detections, FRAME_WIDTH, activation_duration)
                 else:
                     # Still check for position reset even without detections
-                    check_position_reset()
-                    action = 'none'
-                    current_position = CURRENT_POSITION
+                    action, relative_position = handle_detection([], FRAME_WIDTH, activation_duration)
                 
-                # Draw tracking information on frame
+                # Draw tracking information on frame using zone visualization
                 annotated_frame = draw_tracking_info(
-                    orig_frame.copy(), detections, phase, activation_duration, action, current_position
+                    orig_frame.copy(), detections, phase, activation_duration, action, relative_position
                 )
                 
                 # Record frame if video writer is available
