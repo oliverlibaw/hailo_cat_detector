@@ -356,7 +356,13 @@ def process_detections(frame, results):
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 score = float(box.conf[0])
                 class_id = int(box.cls[0])
-                detections.append((x1, y1, x2, y2, score, class_id))
+                # Create dictionary format for consistency
+                detections.append({
+                    'bbox': (x1, y1, x2, y2),
+                    'score': score,
+                    'category_id': class_id,
+                    'label': COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
+                })
     else:
         # Process Degirum results
         try:
@@ -438,7 +444,15 @@ def process_detections(frame, results):
                         
                         # Only add if the box has reasonable size
                         if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
-                            detections.append((x1, y1, x2, y2, score, class_id))
+                            # Create a detection dictionary for consistent handling
+                            detection_dict = {
+                                'bbox': (x1, y1, x2, y2),
+                                'score': score,
+                                'category_id': class_id,
+                                'label': COCO_CLASSES.get(class_id, f"Unknown class {class_id}") if USE_COCO_MODEL else CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
+                            }
+                            detections.append(detection_dict)
+                            
                             if VERBOSE_OUTPUT:
                                 print(f"Added detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}, class={class_id}")
                 
@@ -623,13 +637,20 @@ def draw_overlay(frame, relative_position=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLOR_NAMES['red'], 2)
 
 def load_model():
-    """Load the YOLO11s model for detection."""
+    """Load the YOLO model for detection."""
     try:
-        print(f"Loading YOLO11s model: {model_name}")
+        print(f"Loading YOLO model: {model_name}")
         model_to_load = model_name
         zoo_path = zoo_url
         
         import degirum as dg
+        
+        # Create logs directory for HailoRT logs
+        os.makedirs("logs", exist_ok=True)
+        os.chmod("logs", 0o777)  # Ensure write permissions
+        
+        # Redirect HailoRT logs
+        os.environ["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), "logs")
         
         # Check if model zoo path exists
         if not os.path.exists(zoo_path):
@@ -652,21 +673,23 @@ def load_model():
                 print(f"Available models in {zoo_path}:")
                 for model in available_models:
                     print(f"  - {model}")
+                
+                # Try to use an alternative model if available
+                if available_models and model_to_load not in available_models:
+                    # Prefer YOLOv8 models if available
+                    yolo_models = [m for m in available_models if 'yolo' in m.lower()]
+                    if yolo_models:
+                        model_to_load = yolo_models[0]
+                        print(f"Auto-selecting alternative model: {model_to_load}")
             except Exception as e:
                 print(f"Warning: Could not list contents of model zoo directory: {e}")
         
-        # Load the model with optimized parameters
+        # Load the model with minimal parameters to avoid compatibility issues
         model = dg.load_model(
             model_name=model_to_load,
             inference_host_address=inference_host_address,
             zoo_url=zoo_path,
-            output_confidence_threshold=DETECTION_THRESHOLD,
-            overlay_line_width=3,  # Thicker lines for better visibility
-            overlay_font_scale=2.0,  # Font scale for overlay
-            overlay_show_probabilities=True,  # Show confidence scores
-            output_format="NHWC",  # Use NHWC format for better compatibility
-            output_class_activation_threshold=DETECTION_THRESHOLD,  # Make sure class activation threshold matches confidence
-            batch_size=1  # Set batch size to 1 for consistent performance
+            output_confidence_threshold=DETECTION_THRESHOLD
         )
         
         print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
@@ -926,20 +949,23 @@ def test_degirum_setup():
         if hasattr(dg, '__version__'):
             print(f"DeGirum version: {dg.__version__}")
         
+        # Create a logs directory to help with permissions issues
+        os.makedirs("logs", exist_ok=True)
+        os.chmod("logs", 0o777)  # Ensure write permissions
+        print("Created logs directory for HailoRT logs")
+            
         # Test if Hailo runtime is available
         try:
-            # List available devices if possible
-            if hasattr(dg, 'list_devices'):
-                devices = dg.list_devices()
-                print(f"Available devices: {devices}")
-            else:
-                print("DeGirum does not have list_devices method.")
-                
             # Alternative way to check for Hailo
             import subprocess
             try:
+                # Redirect logs to our directory with permissions
+                env = os.environ.copy()
+                env["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), "logs")
+                
                 result = subprocess.run(['hailortcli', 'device', 'show'], 
-                                        capture_output=True, text=True, timeout=5)
+                                      capture_output=True, text=True, timeout=5,
+                                      env=env)
                 print("Hailo device information:")
                 print(result.stdout)
                 if result.returncode != 0:
@@ -1552,54 +1578,25 @@ def test_relays():
                 GPIO.output(pin, GPIO.HIGH)  # Standard relays: HIGH = OFF (active-low)
                 print(f"{name.upper()} relay (pin {pin}) set to HIGH (OFF)")
         
-        time.sleep(1.0)
+        time.sleep(0.5)
         
-        # Then test each relay individually
+        # Simplified relay test - just briefly trigger each relay once
         for name, pin in RELAY_PINS.items():
             if name == 'unused':
                 continue
                 
-            print(f"\nTesting {name.upper()} relay (pin {pin})...")
+            print(f"Testing {name.upper()} relay (pin {pin})...")
             
             if name == 'squirt':
                 # Turn ON squirt relay (HIGH)
-                print(f"  Setting {name.upper()} relay to ON (HIGH)")
                 GPIO.output(pin, SQUIRT_RELAY_ON_STATE)
-                time.sleep(1.0)
-                
-                # Turn OFF squirt relay (LOW)
-                print(f"  Setting {name.upper()} relay to OFF (LOW)")
+                time.sleep(0.2)  # Brief activation
                 GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
             else:
                 # Turn ON standard relay (LOW)
-                print(f"  Setting {name.upper()} relay to ON (LOW)")
                 GPIO.output(pin, GPIO.LOW)
-                time.sleep(1.0)
-                
-                # Turn OFF standard relay (HIGH)
-                print(f"  Setting {name.upper()} relay to OFF (HIGH)")
+                time.sleep(0.2)  # Brief activation
                 GPIO.output(pin, GPIO.HIGH)
-            
-            time.sleep(0.5)
-        
-        # Test all relays at once
-        print("\nTesting all relays together...")
-        
-        # Turn ON all relays
-        print("  Setting ALL relays to ON")
-        GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_ON_STATE)  # HIGH for squirt
-        for name, pin in RELAY_PINS.items():
-            if name != 'squirt' and name != 'unused':
-                GPIO.output(pin, GPIO.LOW)  # LOW for standard relays
-        
-        time.sleep(1.5)
-        
-        # Turn OFF all relays
-        print("  Setting ALL relays to OFF")
-        GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)  # LOW for squirt
-        for name, pin in RELAY_PINS.items():
-            if name != 'squirt' and name != 'unused':
-                GPIO.output(pin, GPIO.HIGH)  # HIGH for standard relays
             
         print("\nRelay test completed")
         print("====================\n")
@@ -1656,7 +1653,7 @@ def main():
         # Initialize GPIO if not in dev mode
         if not DEV_MODE:
             init_gpio()
-            # Test all relays
+            # Run simplified relay test
             test_relays()
         
         # Test model on a sample image if it exists
@@ -1681,7 +1678,7 @@ def main():
         while True:
             loop_start_time = time.time()
             
-            # Read frame from camera
+            # Read frame from camera - always use the Pi camera for inference
             frame = read_frame(camera)
             
             if frame is None:
@@ -1692,7 +1689,7 @@ def main():
             frame_count += 1
             fps = fps_counter.get_fps()
             
-            # Determine if we should run inference on this frame
+            # Run inference on every FRAME_SKIP frames
             should_run_inference = (frame_count % FRAME_SKIP == 0)
             
             # Run inference if needed
@@ -1700,17 +1697,11 @@ def main():
                 inference_count += 1
                 inference_start_time = time.time()
                 
-                if DEBUG_MODE and inference_count % 10 == 0:
-                    print(f"Running inference #{inference_count} at t={inference_start_time:.2f}s")
-                
-                # Perform inference
+                # Perform inference 
                 try:
-                    if DEV_MODE:
-                        results = model(frame, conf=DETECTION_THRESHOLD)
-                    else:
-                        # Use Degirum's predict_batch method
-                        results_generator = model.predict_batch([frame])
-                        results = next(results_generator)
+                    # Always use Degirum's predict_batch method for Pi camera
+                    results_generator = model.predict_batch([frame])
+                    results = next(results_generator)
                     
                     # Process detection results
                     detections = process_detections(frame, results)
@@ -1719,12 +1710,8 @@ def main():
                     if not detections:
                         no_detection_frames += 1
                         if no_detection_frames <= max_no_detection_frames and last_valid_detections:
-                            if DEBUG_MODE and no_detection_frames == 1:
-                                print(f"No detections in this frame, using last valid detection")
                             detections = last_valid_detections
                         else:
-                            if DEBUG_MODE and no_detection_frames == max_no_detection_frames + 1:
-                                print("No recent valid detections to use")
                             # Clear detections completely
                             detections = []
                     else:
@@ -1733,8 +1720,6 @@ def main():
                         last_valid_detections = detections.copy()
                         
                     inference_time = time.time() - inference_start_time
-                    if DEBUG_MODE and inference_count % 10 == 0:
-                        print(f"Inference took {inference_time*1000:.1f}ms")
                 except Exception as e:
                     print(f"Error during inference: {e}")
                     detections = last_valid_detections if no_detection_frames <= max_no_detection_frames else []
@@ -1742,7 +1727,7 @@ def main():
                 # Reuse last detections when skipping inference
                 detections = last_valid_detections if no_detection_frames <= max_no_detection_frames else []
             
-            # Process actions and update display regardless of whether we did inference
+            # Process actions and update display 
             processed_frame = process_actions(frame, detections, fps)
             
             # Handle video recording
