@@ -173,9 +173,20 @@ last_action = None
 last_action_time = 0
 last_valid_overlay = None  # Stores the last valid image overlay from the model
 last_detection_time = time.time()  # Initialize to current time to prevent immediate reset
-current_position = 0       # Current tracking position: -5 (far left) to +5 (far right), 0 is center
-MAX_POSITION = 5           # Maximum number of positions left/right of center
-POSITION_RESET_TIME = 10.0 # Time in seconds before resetting to center position
+
+# 3-Zone tracking system settings (from test_tracking.py)
+TRACKING_ZONES = {
+    'left':   {'range': (-1.0, -0.35), 'relay': 'right', 'duration': 0.05},
+    'center': {'range': (-0.35, 0.35), 'relay': None, 'duration': 0},
+    'right':  {'range': (0.35, 1.0), 'relay': 'left', 'duration': 0.05}
+}
+CURRENT_ZONE = 'center'  # Current tracking zone
+DEFAULT_MOVEMENT_COOLDOWN = 0.2  # Cooldown between movements
+MOVEMENT_COOLDOWN = DEFAULT_MOVEMENT_COOLDOWN  # Current cooldown time
+LAST_MOVEMENT_TIME = 0  # Time of last movement
+CONSECUTIVE_SAME_MOVEMENTS = 0  # Count consecutive movements in same direction
+MAX_CONSECUTIVE_MOVEMENTS = 4  # Limit consecutive movements to prevent oscillation
+POSITION_RESET_TIME = 60.0  # Time before resetting to center (was 10s)
 
 # Cache for relay states to prevent unnecessary toggling
 relay_state_cache = {
@@ -476,52 +487,137 @@ def activate_relay(pin, duration=0.1):
         last_action_time = current_time
 
 def handle_detection(bbox, frame_width):
-    """Handle detection and activate appropriate relays"""
-    global last_squirt_activation
+    """Handle detection using the 3-zone tracking approach from test_tracking.py"""
+    global last_squirt_activation, CURRENT_ZONE, LAST_MOVEMENT_TIME, CONSECUTIVE_SAME_MOVEMENTS, MOVEMENT_COOLDOWN, last_detection_time
     
+    # Calculate center point and relative position
     x1, y1, x2, y2 = map(int, bbox)
     center_x = (x1 + x2) / 2
-    relative_position = (center_x / frame_width) - 0.5  # -0.5 to 0.5 range
     
+    # Calculate relative position (-1.0 to 1.0 range)
+    relative_position = ((center_x / frame_width) - 0.5) * 2
+    
+    # Update last detection time
+    last_detection_time = time.time()
+    
+    # Check if cooldown period has passed
     current_time = time.time()
     
-    # Check if we can activate the squirt relay (cooldown period)
-    if current_time - last_squirt_activation >= RELAY_SQUIRT_COOLDOWN:
-        activate_relay(RELAY_PINS['squirt'], RELAY_SQUIRT_DURATION)
-        last_squirt_activation = current_time
+    # Determine which zone the object is in
+    detected_zone = None
+    for zone_name, zone_data in TRACKING_ZONES.items():
+        min_pos, max_pos = zone_data['range']
+        if min_pos <= relative_position <= max_pos:
+            detected_zone = zone_name
+            break
     
-    # Activate left or right relay based on position
-    if relative_position < -CENTER_THRESHOLD:
-        activate_relay(RELAY_PINS['left'])
-    elif relative_position > CENTER_THRESHOLD:
-        activate_relay(RELAY_PINS['right'])
+    # Failsafe for out-of-bounds values
+    if detected_zone is None:
+        if relative_position < -1.0:
+            detected_zone = 'left'
+        else:
+            detected_zone = 'right'
+    
+    # Only change zones if it's different and cooldown period has passed
+    if detected_zone != CURRENT_ZONE and current_time - LAST_MOVEMENT_TIME >= MOVEMENT_COOLDOWN:
+        if DEBUG_MODE:
+            print(f"Object detected in {detected_zone} zone (position: {relative_position:.2f})")
+        
+        # Check if we're moving in the same direction as before
+        current_relay = TRACKING_ZONES[detected_zone]['relay'] if detected_zone != 'center' else None
+        previous_relay = TRACKING_ZONES[CURRENT_ZONE]['relay'] if CURRENT_ZONE != 'center' else None
+        
+        if current_relay == previous_relay and current_relay is not None:
+            CONSECUTIVE_SAME_MOVEMENTS += 1
+            if DEBUG_MODE:
+                print(f"Consecutive movement #{CONSECUTIVE_SAME_MOVEMENTS} in same direction")
+        else:
+            CONSECUTIVE_SAME_MOVEMENTS = 0
+        
+        # Get the relay and duration for this zone
+        zone_data = TRACKING_ZONES[detected_zone]
+        relay_name = zone_data['relay']
+        duration = zone_data['duration']  # Always 0.05s for simplicity
+        
+        # Stop movements if we've made too many consecutive moves in same direction
+        if CONSECUTIVE_SAME_MOVEMENTS >= MAX_CONSECUTIVE_MOVEMENTS:
+            if DEBUG_MODE:
+                print(f"Limiting movement after {CONSECUTIVE_SAME_MOVEMENTS} consecutive moves in same direction")
+            relay_name = None
+            CONSECUTIVE_SAME_MOVEMENTS = 0
+            # Longer cooldown after limiting movement
+            MOVEMENT_COOLDOWN = 1.0
+        
+        # Activate squirt relay if cooldown period has passed
+        if current_time - last_squirt_activation >= RELAY_SQUIRT_COOLDOWN:
+            activate_relay(RELAY_PINS['squirt'], RELAY_SQUIRT_DURATION)
+            last_squirt_activation = current_time
+        
+        # Take action if needed
+        if relay_name and duration > 0:
+            if DEBUG_MODE:
+                print(f"Moving {relay_name} for {duration:.3f}s (zone {detected_zone})")
+            activate_relay(RELAY_PINS[relay_name], duration)
+            LAST_MOVEMENT_TIME = current_time
+        
+        # Update current zone
+        CURRENT_ZONE = detected_zone
     
     return relative_position
 
 def draw_overlay(frame, relative_position=None):
-    """Draw visual indicators on the frame"""
+    """Draw visual indicators on the frame showing the 3-zone tracking system"""
     height, width = frame.shape[:2]
     center_x = width // 2
     
     # Draw center line
-    cv2.line(frame, (center_x, 0), (center_x, height), COLORS['yellow'], 1)
+    cv2.line(frame, (center_x, 0), (center_x, height), COLOR_NAMES['yellow'], 1)
     
-    # Draw threshold lines
-    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
-    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
-    cv2.line(frame, (left_threshold, 0), (left_threshold, height), COLORS['red'], 1)
-    cv2.line(frame, (right_threshold, 0), (right_threshold, height), COLORS['red'], 1)
+    # Draw zone boundaries based on TRACKING_ZONES
+    left_boundary = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][0])
+    right_boundary = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][1])
     
-    # Add debug information
+    # Draw zone boundaries
+    cv2.line(frame, (left_boundary, 0), (left_boundary, height), COLOR_NAMES['green'], 2)
+    cv2.line(frame, (right_boundary, 0), (right_boundary, height), COLOR_NAMES['green'], 2)
+    
+    # Add zone labels if debug mode is enabled
+    if DEBUG_MODE:
+        cv2.putText(frame, "LEFT", (left_boundary - 120, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_NAMES['red'], 2)
+        cv2.putText(frame, "CENTER", (center_x - 40, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_NAMES['green'], 2)
+        cv2.putText(frame, "RIGHT", (right_boundary + 40, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_NAMES['red'], 2)
+    
+    # Draw position indicator if available
     if relative_position is not None:
+        # Calculate position marker on screen
+        position_x = int(center_x + (width / 2) * relative_position)
+        
+        # Draw position marker
+        cv2.circle(frame, (position_x, height - 30), 8, COLOR_NAMES['yellow'], -1)
+        
+        # Draw target zone (center)
+        cv2.rectangle(frame, (left_boundary, height - 40), (right_boundary, height - 20), COLOR_NAMES['green'], 2)
+        
+        # Add position text
         pos_text = f"Position: {relative_position:.2f}"
         cv2.putText(frame, pos_text, (10, height - 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLORS['white'], 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['white'], 2)
+        
+        # Add zone info
+        zone_text = f"Zone: {CURRENT_ZONE.upper()}"
+        cv2.putText(frame, zone_text, (10, height - 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['white'], 2)
+        
+        # Add consecutive movement counter in debug mode
+        if DEBUG_MODE:
+            consecutive_text = f"Consecutive: {CONSECUTIVE_SAME_MOVEMENTS}/{MAX_CONSECUTIVE_MOVEMENTS}"
+            cv2.putText(frame, consecutive_text, (10, height - 120),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['yellow'], 2)
     
     # Show last action if within last 2 seconds
     if last_action and time.time() - last_action_time < 2:
         cv2.putText(frame, last_action, (10, height - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLORS['red'], 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLOR_NAMES['red'], 2)
 
 def load_model():
     """Load the YOLO11s model for detection."""
@@ -1044,221 +1140,85 @@ def draw_relay_status(frame, active_relays, current_position=0, max_position=5):
     return frame
 
 def process_actions(frame, detections, fps):
-    """Process detections and take appropriate actions"""
-    global current_position, last_detection_time
+    """Process detected objects and take appropriate actions"""
+    global last_valid_overlay, last_action, last_action_time, last_detection_time
     
-    frame_width = frame.shape[1]
-    
-    # Create a copy for drawing
-    annotated_frame = frame.copy()
-    
-    # Add visual guides
-    height, width = annotated_frame.shape[:2]
-    center_x = width // 2
-    
-    # Draw center line
-    cv2.line(annotated_frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
-    
-    # Draw threshold lines
-    left_threshold = int(width * (0.5 - CENTER_THRESHOLD))
-    right_threshold = int(width * (0.5 + CENTER_THRESHOLD))
-    cv2.line(annotated_frame, (left_threshold, 0), (left_threshold, height), (0, 0, 255), 2)
-    cv2.line(annotated_frame, (right_threshold, 0), (right_threshold, height), (0, 0, 255), 2)
-    
-    # Add header with FPS
-    fps_text = f"FPS: {fps:.1f}"
-    cv2.rectangle(annotated_frame, (0, 0), (200, 40), (0, 0, 0), -1)
-    cv2.putText(annotated_frame, fps_text, (10, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-    
-    # Add model info
-    model_text = f"Model: YOLO11s"
-    threshold_text = f"Threshold: {DETECTION_THRESHOLD:.2f}"
-    cv2.rectangle(annotated_frame, (width - 250, 0), (width, 70), (0, 0, 0), -1)
-    cv2.putText(annotated_frame, model_text, (width - 240, 25), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.putText(annotated_frame, threshold_text, (width - 240, 55), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    
-    # Track active relays for display
-    active_relays = {
-        'squirt': False,
-        'left': False,
-        'right': False
-    }
-    
-    # Frame counter for limiting saved images
-    frame_counter = int(time.time()) % SAVE_INTERVAL
-    
-    # Clean up old frames periodically
-    if frame_counter == 0:
-        cleanup_old_frames()
-    
-    # Check if we need to reset position after no detections
+    # Draw the original image
+    display_frame = frame.copy()
     current_time = time.time()
-    time_since_last_detection = current_time - last_detection_time
     
-    # Add position indicator to frame
-    position_text = f"Position: {current_position}/{MAX_POSITION}"
-    cv2.rectangle(annotated_frame, (width - 250, height - 40), (width, height), (0, 0, 0), -1)
-    cv2.putText(annotated_frame, position_text, (width - 240, height - 10), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    # Initialize relative position to None
+    relative_position = None
     
-    # Reset to center if no detections for POSITION_RESET_TIME
-    if time_since_last_detection > POSITION_RESET_TIME and current_position != 0:
-        if DEBUG_MODE:
-            print(f"No detections for {time_since_last_detection:.1f}s, resetting to center from position {current_position}")
-        
-        # Move back to center in steps
-        if current_position > 0:
-            current_position -= 1
-            active_relays['left'] = True
-            if not DEV_MODE:
-                set_relay(RELAY_PIN_LEFT, True)
-                set_relay(RELAY_PIN_RIGHT, False)
-        elif current_position < 0:
-            current_position += 1
-            active_relays['right'] = True
-            if not DEV_MODE:
-                set_relay(RELAY_PIN_LEFT, False)
-                set_relay(RELAY_PIN_RIGHT, True)
+    # Flag to indicate if we processed any detections
+    detection_processed = False
+    
+    # Process each detection
+    for detection in detections:
+        try:
+            # Extract detection information
+            x1, y1, x2, y2 = detection['bbox']
+            confidence = detection['score']
+            class_id = detection['category_id']
+            label = detection.get('label', '')
+            
+            # Convert to integers and ensure within frame bounds
+            height, width = frame.shape[:2]
+            x1 = max(0, min(width-1, int(x1)))
+            y1 = max(0, min(height-1, int(y1)))
+            x2 = max(0, min(width-1, int(x2)))
+            y2 = max(0, min(height-1, int(y2)))
+            
+            # Ensure the detection is for one of our target classes (cat/dog)
+            if class_id in CLASSES_TO_DETECT:
+                # Mark that we processed a detection
+                detection_processed = True
                 
-        # Sleep briefly to allow movement to take effect
-        time.sleep(0.1)
+                # Handle the detection
+                relative_position = handle_detection((x1, y1, x2, y2), width)
+                
+                # Draw the bounding box and label
+                if class_id in COCO_CLASSES:
+                    label = COCO_CLASSES[class_id]
+                color = COLORS[class_id % len(COLORS)]
+                cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
+                text = f"{label}: {confidence:.2f}"
+                cv2.putText(display_frame, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # Update last detection time
+                last_detection_time = current_time
+                
+                # Draw the position marker
+                draw_overlay(display_frame, relative_position)
+                
+                # Store for future reference
+                last_valid_overlay = display_frame.copy()
+                
+                # Only process the highest confidence detection (sorting is done earlier)
+                break
+                
+        except Exception as e:
+            print(f"Error processing detection: {e}")
     
-    # Process detections if we have any
-    if len(detections) > 0:
-        if VERBOSE_OUTPUT:
-            print(f"Detected {len(detections)} objects")
+    # If no detections were processed
+    if not detection_processed:
+        # Check if we need to reset position
+        reset_occurred = check_position_reset()
         
-        # Update last detection time
-        last_detection_time = current_time
-        
-        # Save detection frame periodically
-        if frame_counter == 0:
-            detection_filename = f"detection_{int(time.time())}.jpg"
-        
-        # We'll find the primary detection to use for relay control
-        # If multiple cats are detected, use the one with highest confidence
-        primary_detection = max(detections, key=lambda d: d[4])  # d[4] is the confidence
-        x1, y1, x2, y2, score, class_id = primary_detection
-        
-        # Calculate relative position for GPIO control
-        object_center_x = (x1 + x2) / 2
-        relative_position = (object_center_x / frame_width) - 0.5
-        
-        # Set relay states based on object position and current tracking position
-        if not DEV_MODE:
-            # Always activate squirt relay for any detection
-            active_relays['squirt'] = True
-            set_relay(RELAY_PINS['squirt'], True)
-            
-            # Incremental position tracking
-            if relative_position < -CENTER_THRESHOLD and current_position > -MAX_POSITION:
-                # Object is on the left side, move left if not at max position
-                current_position -= 1
-                active_relays['left'] = True
-                if DEBUG_MODE and set_relay(RELAY_PIN_LEFT, True):
-                    print(f"Cat on LEFT side - moving left to position {current_position}")
-                set_relay(RELAY_PIN_RIGHT, False)
-            elif relative_position > CENTER_THRESHOLD and current_position < MAX_POSITION:
-                # Object is on the right side, move right if not at max position
-                current_position += 1
-                active_relays['right'] = True
-                set_relay(RELAY_PIN_LEFT, False)
-                if DEBUG_MODE and set_relay(RELAY_PIN_RIGHT, True):
-                    print(f"Cat on RIGHT side - moving right to position {current_position}")
-            else:
-                # Object is centered or we're at max position in the needed direction
-                set_relay(RELAY_PIN_LEFT, False)
-                set_relay(RELAY_PIN_RIGHT, False)
-                if DEBUG_MODE:
-                    if abs(relative_position) <= CENTER_THRESHOLD:
-                        print(f"Cat in CENTER - holding position {current_position}")
-                    else:
-                        print(f"At max position {current_position}, can't move further")
-        
-        # Process each detection for display
-        for detection in detections:
-            x1, y1, x2, y2, score, class_id = detection
-            
-            # Get class name based on which model we're using
-            if USE_COCO_MODEL:
-                class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
-            else:
-                class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-            
-            if VERBOSE_OUTPUT:
-                print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
-            
-            # Draw detection on the annotated frame
-            color_index = class_id % len(COLORS)
-            color = COLORS[color_index]
-            
-            # Draw bounding box
-            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
-            
-            # Add label with confidence
-            label = f"{class_name}: {score:.2f}"
-            cv2.rectangle(annotated_frame, (x1, y1-30), (x1+len(label)*15, y1), color, -1)
-            cv2.putText(annotated_frame, label, (x1, y1-5), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        
-        # Draw directional indicators based on primary detection position
-        if relative_position < -CENTER_THRESHOLD:
-            # Left indicator
-            direction_text = "MOVE LEFT"
-            cv2.putText(annotated_frame, direction_text, (10, height - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-            # Draw left arrow
-            arrow_start = (width // 4, height - 50)
-            arrow_end = (width // 8, height - 50)
-            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
-        elif relative_position > CENTER_THRESHOLD:
-            # Right indicator
-            direction_text = "MOVE RIGHT"
-            cv2.putText(annotated_frame, direction_text, (width - 240, height - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-            # Draw right arrow
-            arrow_start = (width // 4 * 3, height - 50)
-            arrow_end = (width // 8 * 7, height - 50)
-            cv2.arrowedLine(annotated_frame, arrow_start, arrow_end, (0, 0, 255), 4, tipLength=0.5)
-        else:
-            # Center indicator
-            direction_text = "CENTER"
-            cv2.putText(annotated_frame, direction_text, (width // 2 - 80, height - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-        
-        # Add position value
-        pos_text = f"Rel Pos: {relative_position:.2f}"
-        cv2.putText(annotated_frame, pos_text, (10, height - 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                    
-        # Save frame if it's time
-        if frame_counter == 0:
-            # Save the annotated frame
-            cv2.imwrite(detection_filename, annotated_frame)
-            if DEBUG_MODE:
-                print(f"Saved annotated detection image to {detection_filename}")
-    else:
-        # No detections found
-        if not DEV_MODE:
-            # Turn off squirt relay when no detections
-            if set_relay(RELAY_PINS['squirt'], False) and DEBUG_MODE:
-                print("No detections - squirt relay OFF")
-            
-            # Leave the left/right relays in their current state for stepped movement
-            # They will be handled by the reset logic above if needed
+        # If we have a previous overlay, use it
+        if last_valid_overlay is not None:
+            # Fade the overlay to show it's from a previous frame
+            alpha = 0.7  # Higher values are more opaque
+            if relative_position is None:
+                # If no detection in this frame, draw the overlay without a detection
+                draw_overlay(display_frame)
+            display_frame = cv2.addWeighted(display_frame, 1.0, last_valid_overlay, alpha, 0)
+            cv2.putText(display_frame, "No current detection", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['red'], 2)
     
-    # Add timestamp
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    cv2.putText(annotated_frame, timestamp, (width - 250, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    # Draw FPS
+    cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['green'], 2)
     
-    # Draw relay status on frame
-    annotated_frame = draw_relay_status(annotated_frame, active_relays, current_position, MAX_POSITION)
-    
-    return annotated_frame
+    return display_frame
 
 def test_model_on_sample(model):
     """Test the model on a sample image"""
@@ -1627,6 +1587,20 @@ def test_relays():
         print(f"Error testing relays: {e}")
         import traceback
         traceback.print_exc()
+
+def check_position_reset():
+    """Check if position should be reset to center due to inactivity"""
+    global CURRENT_ZONE, last_detection_time
+    
+    # If no detection for POSITION_RESET_TIME, reset to center
+    if time.time() - last_detection_time > POSITION_RESET_TIME:
+        if CURRENT_ZONE != 'center':
+            if DEBUG_MODE:
+                print(f"No detection for {POSITION_RESET_TIME:.1f}s, resetting to center")
+            CURRENT_ZONE = 'center'
+            return True
+    
+    return False
 
 def main():
     """Main function"""
