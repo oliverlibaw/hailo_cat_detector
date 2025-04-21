@@ -45,7 +45,7 @@ VIDEO_RESOLUTION = (640, 640)
 FRAME_WIDTH, FRAME_HEIGHT = VIDEO_RESOLUTION
 
 # Detection settings
-DETECTION_THRESHOLD = 0.30
+DETECTION_THRESHOLD = 0.40
 CENTER_THRESHOLD = 0.1
 COCO_CLASSES = {
     0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 
@@ -75,7 +75,7 @@ TEST_DURATION = 30  # Duration for each test phase in seconds (increased from 15
 NUM_TEST_PHASES = 4  # Number of test phases
 
 # Initial activation duration and increment
-BASE_DURATION = 0.2  # seconds - starting with 0.2s
+BASE_DURATION = 0.05  # seconds - starting with 0.2s
 INCREMENT = 0.1      # seconds per phase - test 0.2s, 0.3s, 0.4s, 0.5s
 
 # Camera settings optimized for better detection
