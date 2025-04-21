@@ -40,19 +40,7 @@ echo ""
 echo "Press Ctrl+C to stop the test at any time."
 echo ""
 
-# Check if Hailo device is connected
-if lsusb | grep -q Hailo; then
-    echo "Hailo device detected"
-else
-    echo "WARNING: Hailo device not detected!"
-    echo "Please ensure the Hailo AI Kit is properly connected via USB."
-    echo "Continue anyway? (y/n)"
-    read CONTINUE
-    if [ "$CONTINUE" != "y" ]; then
-        echo "Exiting. Connect the Hailo device and try again."
-        exit 1
-    fi
-fi
+
 
 # Make the test script executable
 chmod +x test_tracking.py

@@ -111,9 +111,9 @@ LAST_DETECTION_TIME = time.time()  # Time of last detection
 
 # Simplified 3-zone tracking system with minimal movements
 TRACKING_ZONES = {
-    'left':   {'range': (-1.0, -0.3), 'relay': 'right', 'duration': 0.05},
-    'center': {'range': (-0.3, 0.3), 'relay': None, 'duration': 0},
-    'right':  {'range': (0.3, 1.0), 'relay': 'left', 'duration': 0.05}
+    'left':   {'range': (-1.0, -0.35), 'relay': 'right', 'duration': 0.05},
+    'center': {'range': (-0.35, 0.35), 'relay': None, 'duration': 0},
+    'right':  {'range': (0.35, 1.0), 'relay': 'left', 'duration': 0.05}
 }
 CURRENT_ZONE = 'center'  # Current tracking zone
 DEFAULT_MOVEMENT_COOLDOWN = 0.5  # Increased cooldown to prevent quick successive movements
