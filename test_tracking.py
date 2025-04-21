@@ -75,8 +75,8 @@ TEST_DURATION = 30  # Duration for each test phase in seconds (increased from 15
 NUM_TEST_PHASES = 4  # Number of test phases
 
 # Initial activation duration and increment
-BASE_DURATION = 0.05  # seconds - starting with 0.2s
-INCREMENT = 0.1      # seconds per phase - test 0.2s, 0.3s, 0.4s, 0.5s
+BASE_DURATION = 0.02  # seconds - starting with 0.2s
+INCREMENT = 0.05      # seconds per phase - test 0.2s, 0.3s, 0.4s, 0.5s
 
 # Camera settings optimized for better detection
 CAMERA_SETTINGS = {
@@ -116,11 +116,11 @@ TRACKING_ZONES = {
     'right':  {'range': (0.35, 1.0), 'relay': 'left', 'duration': 0.05}
 }
 CURRENT_ZONE = 'center'  # Current tracking zone
-DEFAULT_MOVEMENT_COOLDOWN = 0.5  # Increased cooldown to prevent quick successive movements
+DEFAULT_MOVEMENT_COOLDOWN = 0.2  # Increased cooldown to prevent quick successive movements
 MOVEMENT_COOLDOWN = DEFAULT_MOVEMENT_COOLDOWN  # Current cooldown time (can be dynamically adjusted)
 LAST_MOVEMENT_TIME = 0  # Time of last movement
-CONSECUTIVE_SAME_MOVEMENTS = 0  # Count consecutive movements in same direction
-MAX_CONSECUTIVE_MOVEMENTS = 2  # Stricter limit on consecutive movements to prevent oscillation
+CONSECUTIVE_SAME_MOVEMENTS = 3  # Count consecutive movements in same direction
+MAX_CONSECUTIVE_MOVEMENTS = 4  # Stricter limit on consecutive movements to prevent oscillation
 
 def resize_image_letterbox(image, target_shape=(640, 640)):
     """
@@ -637,22 +637,19 @@ def draw_tracking_info(frame, detections, phase, activation_duration, action=Non
     center_x = width // 2
     cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 255), 2)
     
-    # Draw zone dividers
-    for zone_name, zone_data in TRACKING_ZONES.items():
-        if zone_name != 'right':  # Skip last zone boundary
-            # Convert zone boundary to pixel position
-            _, max_pos = zone_data['range']
-            boundary_x = int(center_x + (width / 2) * max_pos)
-            
-            # Different colors for zone boundaries
-            if zone_name == 'center':
-                color = (0, 255, 0)  # Green for center zone
-                thickness = 2
-            else:
-                color = (0, 0, 200)  # Red for outer zones
-                thickness = 1
-                
-            cv2.line(frame, (boundary_x, 0), (boundary_x, height), color, thickness)
+    # Draw zone dividers based on current TRACKING_ZONES settings
+    left_boundary = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][0])
+    right_boundary = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][1])
+    
+    # Draw left zone boundary (green, thicker)
+    cv2.line(frame, (left_boundary, 0), (left_boundary, height), (0, 255, 0), 2)
+    # Draw right zone boundary (green, thicker)
+    cv2.line(frame, (right_boundary, 0), (right_boundary, height), (0, 255, 0), 2)
+    
+    # Add zone labels
+    cv2.putText(frame, "LEFT", (left_boundary - 120, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    cv2.putText(frame, "CENTER", (center_x - 40, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    cv2.putText(frame, "RIGHT", (right_boundary + 40, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
     
     # Draw position indicator
     if relative_position is not None:
@@ -663,30 +660,33 @@ def draw_tracking_info(frame, detections, phase, activation_duration, action=Non
         cv2.circle(frame, (position_x, height - 30), 8, (0, 255, 255), -1)
         
         # Draw target zone (center)
-        center_min = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][0])
-        center_max = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][1])
-        cv2.rectangle(frame, (center_min, height - 40), (center_max, height - 20), (0, 255, 0), 2)
+        cv2.rectangle(frame, (left_boundary, height - 40), (right_boundary, height - 20), (0, 255, 0), 2)
     
     # Draw test phase information
-    cv2.rectangle(frame, (0, 0), (width, 60), (0, 0, 0), -1)
+    cv2.rectangle(frame, (0, 50), (width, 110), (0, 0, 0), -1)
     phase_text = f"Test Phase: {phase+1}/{NUM_TEST_PHASES}"
-    duration_text = f"Fixed duration: 0.05s (test phases not used)"
-    cv2.putText(frame, phase_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    cv2.putText(frame, duration_text, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    config_text = f"Current Settings: {TRACKING_ZONES['left']['duration']}s movements, {DEFAULT_MOVEMENT_COOLDOWN}s cooldown"
+    cv2.putText(frame, phase_text, (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cv2.putText(frame, config_text, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    # Draw tracking configuration information
+    zone_width_pct = int((TRACKING_ZONES['center']['range'][1] - TRACKING_ZONES['center']['range'][0]) * 100 / 2)
+    tracking_info = f"Center zone: ±{zone_width_pct}%, Max consecutive: {MAX_CONSECUTIVE_MOVEMENTS}"
+    cv2.putText(frame, tracking_info, (10, height - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     
     # Draw action information if available
     if action:
         action_color = (0, 255, 0) if action == 'center' or action == 'no_change' else (0, 0, 255)
-        cv2.rectangle(frame, (width - 300, 0), (width, 90), (0, 0, 0), -1)
+        cv2.rectangle(frame, (width - 300, 50), (width, 140), (0, 0, 0), -1)
         
         # Get current zone info
         zone_text = f"Zone: {CURRENT_ZONE}"
         action_text = f"Action: {action.upper()}"
-        consecutive_text = f"Consecutive: {CONSECUTIVE_SAME_MOVEMENTS}"
+        consecutive_text = f"Consecutive: {CONSECUTIVE_SAME_MOVEMENTS}/{MAX_CONSECUTIVE_MOVEMENTS}"
         
-        cv2.putText(frame, zone_text, (width - 290, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(frame, action_text, (width - 290, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, action_color, 2)
-        cv2.putText(frame, consecutive_text, (width - 290, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
+        cv2.putText(frame, zone_text, (width - 290, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame, action_text, (width - 290, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, action_color, 2)
+        cv2.putText(frame, consecutive_text, (width - 290, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
     
     # Draw detections
     for i, detection in enumerate(detections):
