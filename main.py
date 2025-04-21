@@ -73,7 +73,7 @@ FRAME_SKIP = 3  # Process only every Nth frame for inference (higher = better FP
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 640  # Updated to match model input size for better accuracy
 FPS = 30  # Target FPS (updated to match VIDEO_FPS)
-DEBUG_MODE = True  # Enable for debugging relay issues
+DEBUG_MODE = False  # Disable debug mode for production
 VERBOSE_OUTPUT = False  # Reduce console output
 SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
 SAVE_INTERVAL = 30  # Only save every 30th frame with detections to improve performance
@@ -208,6 +208,9 @@ SOUND_FILES = [
 # Define GPIO pins for relay control
 RELAY_PIN_LEFT = RELAY_PINS['left']
 RELAY_PIN_RIGHT = RELAY_PINS['right']
+
+# At the top of the file with other global variables (around line 200), add:
+VIDEO_START_RECORD_DURATION = 60  # Duration in seconds to record video after script starts
 
 def setup_sound():
     """Initialize pygame mixer for sound effects"""
@@ -1212,7 +1215,15 @@ def process_actions(frame, detections, fps):
             if relative_position is None:
                 # If no detection in this frame, draw the overlay without a detection
                 draw_overlay(display_frame)
-            display_frame = cv2.addWeighted(display_frame, 1.0, last_valid_overlay, alpha, 0)
+                
+            # Ensure the dimensions match before using addWeighted
+            if display_frame.shape == last_valid_overlay.shape:
+                display_frame = cv2.addWeighted(display_frame, 1.0, last_valid_overlay, alpha, 0)
+            else:
+                # Resize last_valid_overlay to match display_frame
+                last_valid_overlay_resized = cv2.resize(last_valid_overlay, (display_frame.shape[1], display_frame.shape[0]))
+                display_frame = cv2.addWeighted(display_frame, 1.0, last_valid_overlay_resized, alpha, 0)
+                
             cv2.putText(display_frame, "No current detection", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['red'], 2)
     
     # Draw FPS
@@ -1627,9 +1638,11 @@ def main():
         # Configure camera
         camera = setup_camera()
         
-        # Initialize video writer if recording is enabled
-        video_writer = init_video_writer() if RECORD_VIDEO else None
+        # Initialize video writer for initial recording period
+        start_record = True
+        video_writer = init_video_writer() if (RECORD_VIDEO or start_record) else None
         video_start_time = time.time()
+        program_start_time = time.time()
         
         # Initialize GPIO if not in dev mode
         if not DEV_MODE:
@@ -1723,18 +1736,30 @@ def main():
             # Process actions and update display regardless of whether we did inference
             processed_frame = process_actions(frame, detections, fps)
             
-            # Record video if enabled
-            if RECORD_VIDEO and video_writer is not None:
+            # Handle video recording
+            current_time = time.time()
+            elapsed_time = current_time - program_start_time
+            
+            # Record video if enabled, including first 60 seconds after start
+            should_record = RECORD_VIDEO or (elapsed_time < VIDEO_START_RECORD_DURATION)
+            
+            if should_record and video_writer is not None:
                 try:
                     # Write the processed frame (with annotations) to video
                     video_writer.write(processed_frame)
                     
                     # Check if we need to create a new video file (max length reached)
-                    video_duration = time.time() - video_start_time
+                    video_duration = current_time - video_start_time
                     if video_duration >= VIDEO_MAX_LENGTH:
                         print(f"Video reached maximum length ({VIDEO_MAX_LENGTH}s), creating new file")
                         video_writer = create_new_video_writer(video_writer)
-                        video_start_time = time.time()
+                        video_start_time = current_time
+                        
+                    # After 60 seconds, check if we should stop recording (if not RECORD_VIDEO)
+                    if elapsed_time >= VIDEO_START_RECORD_DURATION and not RECORD_VIDEO and video_writer is not None:
+                        print(f"Finished 60-second initial recording")
+                        cleanup_video_writer(video_writer)
+                        video_writer = None
                         
                 except Exception as e:
                     print(f"Error writing video frame: {e}")
