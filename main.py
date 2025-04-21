@@ -1159,11 +1159,20 @@ def process_actions(frame, detections, fps):
     # Process each detection
     for detection in detections:
         try:
-            # Extract detection information
-            x1, y1, x2, y2 = detection['bbox']
-            confidence = detection['score']
-            class_id = detection['category_id']
-            label = detection.get('label', '')
+            # Extract detection information - handle both tuple and dictionary formats
+            if isinstance(detection, tuple) and len(detection) >= 6:
+                # Tuple format: (x1, y1, x2, y2, score, class_id)
+                x1, y1, x2, y2, confidence, class_id = detection
+                label = ""
+            elif isinstance(detection, dict):
+                # Dictionary format
+                x1, y1, x2, y2 = detection['bbox']
+                confidence = detection['score']
+                class_id = detection['category_id']
+                label = detection.get('label', '')
+            else:
+                print(f"Unknown detection format: {type(detection)}")
+                continue
             
             # Convert to integers and ensure within frame bounds
             height, width = frame.shape[:2]
