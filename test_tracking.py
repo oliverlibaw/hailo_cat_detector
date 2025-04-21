@@ -109,22 +109,18 @@ COLORS = [
 POSITION_RESET_TIME = 60.0  # Reset to center after 1 minute without detections
 LAST_DETECTION_TIME = time.time()  # Time of last detection
 
-# Fine-grained zone-based tracking system with 7 zones and shorter durations
+# Simplified 3-zone tracking system with minimal movements
 TRACKING_ZONES = {
-    'extreme_left': {'range': (-1.0, -0.7), 'relay': 'right', 'duration': 0.15},
-    'far_left':     {'range': (-0.7, -0.4), 'relay': 'right', 'duration': 0.10},
-    'near_left':    {'range': (-0.4, -0.15), 'relay': 'right', 'duration': 0.05},
-    'center':       {'range': (-0.15, 0.15), 'relay': None, 'duration': 0},
-    'near_right':   {'range': (0.15, 0.4), 'relay': 'left', 'duration': 0.05},
-    'far_right':    {'range': (0.4, 0.7), 'relay': 'left', 'duration': 0.10},
-    'extreme_right': {'range': (0.7, 1.0), 'relay': 'left', 'duration': 0.15}
+    'left':   {'range': (-1.0, -0.3), 'relay': 'right', 'duration': 0.05},
+    'center': {'range': (-0.3, 0.3), 'relay': None, 'duration': 0},
+    'right':  {'range': (0.3, 1.0), 'relay': 'left', 'duration': 0.05}
 }
 CURRENT_ZONE = 'center'  # Current tracking zone
-DEFAULT_MOVEMENT_COOLDOWN = 0.3  # Default cooldown time between movements
+DEFAULT_MOVEMENT_COOLDOWN = 0.5  # Increased cooldown to prevent quick successive movements
 MOVEMENT_COOLDOWN = DEFAULT_MOVEMENT_COOLDOWN  # Current cooldown time (can be dynamically adjusted)
 LAST_MOVEMENT_TIME = 0  # Time of last movement
 CONSECUTIVE_SAME_MOVEMENTS = 0  # Count consecutive movements in same direction
-MAX_CONSECUTIVE_MOVEMENTS = 3  # Limit consecutive movements to prevent oscillation
+MAX_CONSECUTIVE_MOVEMENTS = 2  # Stricter limit on consecutive movements to prevent oscillation
 
 def resize_image_letterbox(image, target_shape=(640, 640)):
     """
@@ -562,12 +558,12 @@ def calculate_object_zone(detections, frame_width):
     
     # Failsafe for out-of-bounds values
     if relative_position < -1.0:
-        return 'extreme_left', relative_position
+        return 'left', relative_position
     else:
-        return 'extreme_right', relative_position
+        return 'right', relative_position
 
 def handle_detection(detections, frame_width, base_activation_duration):
-    """Handle detection and calculate appropriate movement using fine-grained zone-based approach"""
+    """Handle detection and calculate appropriate movement using simplified zone-based approach"""
     global CURRENT_ZONE, LAST_DETECTION_TIME, LAST_MOVEMENT_TIME, CONSECUTIVE_SAME_MOVEMENTS, MOVEMENT_COOLDOWN
     
     # Optionally trigger the squirt relay on every detection for testing
@@ -583,43 +579,32 @@ def handle_detection(detections, frame_width, base_activation_duration):
         detected_zone, relative_position = zone_info
         LAST_DETECTION_TIME = time.time()
         
-        # Special handling to prevent overshooting
-        # If we've moved in the same direction several times and the object is near center
-        # reduce the movement duration to fine-tune the position
-        current_relay = TRACKING_ZONES[detected_zone]['relay'] if detected_zone != 'center' else None
-        previous_relay = TRACKING_ZONES[CURRENT_ZONE]['relay'] if CURRENT_ZONE != 'center' else None
-        
         # Only change zones if it's different and cooldown period has passed
         if detected_zone != CURRENT_ZONE and time.time() - LAST_MOVEMENT_TIME >= MOVEMENT_COOLDOWN:
             print(f"Object detected in {detected_zone} zone (position: {relative_position:.2f})")
             
             # Check if we're moving in the same direction as before
+            current_relay = TRACKING_ZONES[detected_zone]['relay'] if detected_zone != 'center' else None
+            previous_relay = TRACKING_ZONES[CURRENT_ZONE]['relay'] if CURRENT_ZONE != 'center' else None
+            
             if current_relay == previous_relay and current_relay is not None:
                 CONSECUTIVE_SAME_MOVEMENTS += 1
+                print(f"Consecutive movement #{CONSECUTIVE_SAME_MOVEMENTS} in same direction")
             else:
                 CONSECUTIVE_SAME_MOVEMENTS = 0
             
             # Get the relay and duration for this zone
             zone_data = TRACKING_ZONES[detected_zone]
             relay_name = zone_data['relay']
-            duration = zone_data['duration']
-            
-            # Reduce duration for consecutive movements to prevent overshooting
-            if CONSECUTIVE_SAME_MOVEMENTS > 0:
-                # Gradually reduce duration based on consecutive movements
-                reduction_factor = 1.0 - (CONSECUTIVE_SAME_MOVEMENTS * 0.2)  # 20% reduction per consecutive move
-                duration *= max(0.3, reduction_factor)  # Don't go below 30% of original duration
-                print(f"Reduced duration to {duration:.3f}s due to {CONSECUTIVE_SAME_MOVEMENTS} consecutive movements")
+            duration = zone_data['duration']  # Always 0.05s for simplicity
             
             # Stop movements if we've made too many consecutive moves in same direction
-            # This prevents oscillation around the center
             if CONSECUTIVE_SAME_MOVEMENTS >= MAX_CONSECUTIVE_MOVEMENTS:
                 print(f"Limiting movement after {CONSECUTIVE_SAME_MOVEMENTS} consecutive moves in same direction")
                 relay_name = None
-                duration = 0
-                # Reset counter and add extra cooldown to stabilize
                 CONSECUTIVE_SAME_MOVEMENTS = 0
-                MOVEMENT_COOLDOWN = 1.0  # Extra cooldown after max consecutive movements
+                # Longer cooldown after limiting movement
+                MOVEMENT_COOLDOWN = 1.0
             
             # Take action if needed
             if relay_name and duration > 0:
@@ -654,23 +639,17 @@ def draw_tracking_info(frame, detections, phase, activation_duration, action=Non
     
     # Draw zone dividers
     for zone_name, zone_data in TRACKING_ZONES.items():
-        if zone_name != 'extreme_right':  # Skip last zone boundary
+        if zone_name != 'right':  # Skip last zone boundary
             # Convert zone boundary to pixel position
             _, max_pos = zone_data['range']
             boundary_x = int(center_x + (width / 2) * max_pos)
             
-            # Different colors for different zone boundaries
+            # Different colors for zone boundaries
             if zone_name == 'center':
                 color = (0, 255, 0)  # Green for center zone
                 thickness = 2
-            elif zone_name == 'near_left' or zone_name == 'near_right':
-                color = (0, 200, 100)  # Light green for near zones
-                thickness = 1
-            elif zone_name == 'far_left' or zone_name == 'far_right':
-                color = (0, 100, 200)  # Light blue for far zones
-                thickness = 1
             else:
-                color = (0, 0, 200)  # Red for extreme zones
+                color = (0, 0, 200)  # Red for outer zones
                 thickness = 1
                 
             cv2.line(frame, (boundary_x, 0), (boundary_x, height), color, thickness)
@@ -691,7 +670,7 @@ def draw_tracking_info(frame, detections, phase, activation_duration, action=Non
     # Draw test phase information
     cv2.rectangle(frame, (0, 0), (width, 60), (0, 0, 0), -1)
     phase_text = f"Test Phase: {phase+1}/{NUM_TEST_PHASES}"
-    duration_text = f"Base Duration: {activation_duration:.2f}s (not used)"
+    duration_text = f"Fixed duration: 0.05s (test phases not used)"
     cv2.putText(frame, phase_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     cv2.putText(frame, duration_text, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
