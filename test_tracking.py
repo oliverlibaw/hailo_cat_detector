@@ -120,7 +120,8 @@ TRACKING_ZONES = {
     'extreme_right': {'range': (0.7, 1.0), 'relay': 'left', 'duration': 0.15}
 }
 CURRENT_ZONE = 'center'  # Current tracking zone
-MOVEMENT_COOLDOWN = 0.3  # Reduced cooldown time (was 0.5s)
+DEFAULT_MOVEMENT_COOLDOWN = 0.3  # Default cooldown time between movements
+MOVEMENT_COOLDOWN = DEFAULT_MOVEMENT_COOLDOWN  # Current cooldown time (can be dynamically adjusted)
 LAST_MOVEMENT_TIME = 0  # Time of last movement
 CONSECUTIVE_SAME_MOVEMENTS = 0  # Count consecutive movements in same direction
 MAX_CONSECUTIVE_MOVEMENTS = 3  # Limit consecutive movements to prevent oscillation
@@ -567,7 +568,7 @@ def calculate_object_zone(detections, frame_width):
 
 def handle_detection(detections, frame_width, base_activation_duration):
     """Handle detection and calculate appropriate movement using fine-grained zone-based approach"""
-    global CURRENT_ZONE, LAST_DETECTION_TIME, LAST_MOVEMENT_TIME, CONSECUTIVE_SAME_MOVEMENTS
+    global CURRENT_ZONE, LAST_DETECTION_TIME, LAST_MOVEMENT_TIME, CONSECUTIVE_SAME_MOVEMENTS, MOVEMENT_COOLDOWN
     
     # Optionally trigger the squirt relay on every detection for testing
     TEST_SQUIRT = False  # Set to True to test the squirt relay
@@ -813,7 +814,7 @@ def signal_handler(sig, frame):
 
 def main():
     """Main function that runs the tracking tests"""
-    global CURRENT_ZONE, LAST_DETECTION_TIME
+    global CURRENT_ZONE, LAST_DETECTION_TIME, MOVEMENT_COOLDOWN
     
     try:
         # Register signal handler for graceful exit
@@ -875,6 +876,7 @@ def main():
         # Reset tracking variables
         CURRENT_ZONE = 'center'
         LAST_DETECTION_TIME = time.time()
+        MOVEMENT_COOLDOWN = DEFAULT_MOVEMENT_COOLDOWN  # Reset to default at start
         
         # Run tests for each phase
         for phase in range(NUM_TEST_PHASES):
