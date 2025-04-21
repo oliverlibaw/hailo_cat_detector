@@ -483,14 +483,55 @@ def activate_relay(pin, duration=0.1):
     """Activate a relay for the specified duration"""
     global last_action, last_action_time
     
-    current_time = time.time()
     if not DEV_MODE:
-        # Use the set_relay function to correctly handle different relay behaviors
-        set_relay(pin, True)  # Turn ON
-        time.sleep(duration)
-        set_relay(pin, False)  # Turn OFF
+        try:
+            # Debug output
+            if DEBUG_MODE:
+                print(f"Activating relay on pin {pin} for {duration:.2f} seconds")
+            
+            # Turn ON the relay
+            if pin == RELAY_PINS['squirt']:
+                # Squirt relay: HIGH = ON, LOW = OFF
+                GPIO.output(pin, SQUIRT_RELAY_ON_STATE)
+                if DEBUG_MODE:
+                    print(f"  Set squirt relay to ON state: {SQUIRT_RELAY_ON_STATE}")
+            else:
+                # Standard relays: active-low behavior (LOW = ON, HIGH = OFF)
+                active_state = GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH
+                GPIO.output(pin, active_state)
+                if DEBUG_MODE:
+                    print(f"  Set relay to active state: {active_state}")
+            
+            # Update last action information
+            current_time = time.time()
+            if pin == RELAY_PINS['squirt']:
+                last_action = "SQUIRT!"
+            elif pin == RELAY_PINS['left']:
+                last_action = "MOVE LEFT!"
+            elif pin == RELAY_PINS['right']:
+                last_action = "MOVE RIGHT!"
+            last_action_time = current_time
+            
+            # Wait for the specified duration
+            time.sleep(duration)
+            
+            # Turn OFF the relay
+            if pin == RELAY_PINS['squirt']:
+                GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
+                if DEBUG_MODE:
+                    print(f"  Set squirt relay to OFF state: {SQUIRT_RELAY_OFF_STATE}")
+            else:
+                inactive_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+                GPIO.output(pin, inactive_state)
+                if DEBUG_MODE:
+                    print(f"  Set relay to inactive state: {inactive_state}")
+                
+            return True
+        except Exception as e:
+            print(f"Error activating relay {pin}: {e}")
+            return False
     else:
-        # Simulate relay activation with messages and sound
+        # In dev mode, just simulate the relay activation with messages and sound
         if pin == RELAY_PINS['squirt']:
             last_action = "SQUIRT!"
             print("Squirt!")
@@ -501,7 +542,11 @@ def activate_relay(pin, duration=0.1):
         elif pin == RELAY_PINS['right']:
             last_action = "MOVE RIGHT!"
             print("Move Right!")
+        
+        current_time = time.time()
         last_action_time = current_time
+        time.sleep(duration)  # Simulate the duration
+        return True
 
 def handle_detection(bbox, frame_width):
     """Handle detection using the 3-zone tracking approach from test_tracking.py"""
@@ -554,7 +599,7 @@ def handle_detection(bbox, frame_width):
         # Get the relay and duration for this zone
         zone_data = TRACKING_ZONES[detected_zone]
         relay_name = zone_data['relay']
-        duration = zone_data['duration']  # Always 0.05s for simplicity
+        duration = zone_data['duration']
         
         # Stop movements if we've made too many consecutive moves in same direction
         if CONSECUTIVE_SAME_MOVEMENTS >= MAX_CONSECUTIVE_MOVEMENTS:
@@ -1389,32 +1434,31 @@ def read_frame(camera):
 
 def init_gpio():
     """Initialize GPIO pins for relay control"""
-    try:
-        import RPi.GPIO as GPIO
-        GPIO.setmode(GPIO.BCM)
-        
-        # Setup all relay pins as OUTPUT
-        GPIO.setup(RELAY_PIN_LEFT, GPIO.OUT)
-        GPIO.setup(RELAY_PIN_RIGHT, GPIO.OUT)
-        GPIO.setup(RELAY_PINS['squirt'], GPIO.OUT)
-        GPIO.setup(RELAY_PINS['unused'], GPIO.OUT)  # Setup unused relay too
-        
-        # For normally closed relays with active LOW:
-        # - To turn relay OFF (close circuit): Set GPIO HIGH (deactivate relay)
-        # - To turn relay ON (open circuit): Set GPIO LOW (activate relay)
-        initial_state = False  # We always want relays to start in the OFF state
-        
-        # Initialize all relays to OFF state
-        print("Setting all relays to OFF state...")
-        for name, pin in RELAY_PINS.items():
-            set_relay(pin, initial_state)
-        
-        print(f"GPIO initialized with relay pins: squirt={RELAY_PINS['squirt']}, left={RELAY_PIN_LEFT}, right={RELAY_PIN_RIGHT}")
-        print(f"Relays are {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'} and {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
-    except ImportError:
-        print("WARNING: RPi.GPIO module not available, GPIO control disabled")
-    except Exception as e:
-        print(f"Error initializing GPIO: {e}")
+    if not DEV_MODE:
+        try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            
+            # Initialize all pins as outputs
+            for pin in RELAY_PINS.values():
+                GPIO.setup(pin, GPIO.OUT)
+            
+            # Initialize the squirt relay to OFF state (LOW)
+            print(f"Setting SQUIRT relay (pin {RELAY_PINS['squirt']}) to OFF state...")
+            GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
+            
+            # Initialize other relays to OFF state (HIGH for active-low relays)
+            for name, pin in RELAY_PINS.items():
+                if name != 'squirt' and name != 'unused':
+                    print(f"Setting {name} relay (pin {pin}) to OFF state...")
+                    GPIO.output(pin, GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)
+            
+            print(f"GPIO initialized with relay pins: squirt={RELAY_PINS['squirt']}, left={RELAY_PINS['left']}, right={RELAY_PINS['right']}")
+            print(f"Relays are {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'} and {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
+        except ImportError:
+            print("WARNING: RPi.GPIO module not available, GPIO control disabled")
+        except Exception as e:
+            print(f"Error initializing GPIO: {e}")
 
 def set_relay(pin, state):
     """
@@ -1493,7 +1537,7 @@ def cleanup():
             for name, pin in RELAY_PINS.items():
                 if name != 'squirt' and name != 'unused':
                     print(f"Setting {name} relay (pin {pin}) to OFF state...")
-                    GPIO.output(pin, GPIO.HIGH)  # HIGH = OFF for standard active-low relays
+                    GPIO.output(pin, GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)  # Set to OFF state
             
             time.sleep(0.5)  # Give time for states to take effect
             
@@ -1557,7 +1601,7 @@ def print_header():
     print("")
 
 def test_relays():
-    """Test all relays in sequence to verify they're working"""
+    """Test all relays to ensure they're working properly"""
     if DEV_MODE:
         print("Skipping relay test in development mode")
         return
@@ -1575,36 +1619,26 @@ def test_relays():
         # Handle other relays
         for name, pin in RELAY_PINS.items():
             if name != 'squirt' and name != 'unused':
-                GPIO.output(pin, GPIO.HIGH)  # Standard relays: HIGH = OFF (active-low)
-                print(f"{name.upper()} relay (pin {pin}) set to HIGH (OFF)")
+                GPIO.output(pin, GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)  # Set to OFF state
+                print(f"{name.upper()} relay (pin {pin}) set to {'HIGH' if RELAY_ACTIVE_LOW else 'LOW'} (OFF)")
         
         time.sleep(0.5)
         
-        # Simplified relay test - just briefly trigger each relay once
+        # Simplified relay test - briefly trigger each relay
         for name, pin in RELAY_PINS.items():
             if name == 'unused':
                 continue
                 
             print(f"Testing {name.upper()} relay (pin {pin})...")
-            
-            if name == 'squirt':
-                # Turn ON squirt relay (HIGH)
-                GPIO.output(pin, SQUIRT_RELAY_ON_STATE)
-                time.sleep(0.2)  # Brief activation
-                GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
-            else:
-                # Turn ON standard relay (LOW)
-                GPIO.output(pin, GPIO.LOW)
-                time.sleep(0.2)  # Brief activation
-                GPIO.output(pin, GPIO.HIGH)
-            
+            activate_relay(pin, 0.3)  # Brief activation for each relay
+        
         print("\nRelay test completed")
         print("====================\n")
     except Exception as e:
         print(f"Error testing relays: {e}")
         import traceback
         traceback.print_exc()
-
+        
 def check_position_reset():
     """Check if position should be reset to center due to inactivity"""
     global CURRENT_ZONE, last_detection_time
@@ -1776,9 +1810,10 @@ def main():
         
         # Make sure to turn off all relays when exiting
         if not DEV_MODE:
-            set_relay(RELAY_PIN_LEFT, False)
-            set_relay(RELAY_PIN_RIGHT, False)
-            set_relay(RELAY_PINS['squirt'], False)
+            # Use RELAY_PINS directly
+            GPIO.output(RELAY_PINS['left'], GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)
+            GPIO.output(RELAY_PINS['right'], GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)
+            GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
         
     except Exception as e:
         print(f"Error in main loop: {str(e)}")
