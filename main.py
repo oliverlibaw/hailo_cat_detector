@@ -1,1842 +1,1258 @@
-# This project detects cats and triggers a water gun to squirt them. It runs on a Raspberry Pi 5 with a Hailo AI Kit and a four-relay HAT.
+# main_pd.py
+# This project detects cats/dogs and triggers a water gun to squirt them.
+# It runs on a Raspberry Pi 5 with a Hailo AI Kit and a four-relay HAT.
+# Uses PD control for smoother centering.
 
 import os
 import cv2
 import time
 import numpy as np
 import random
-import torch
-from ultralytics import YOLO
-import pygame
+import datetime
 import signal
 import sys
-import datetime
-
-# Development mode flag - set to True when developing on MacBook
-DEV_MODE = False  # Set to False for Raspberry Pi deployment
+import traceback
+import RPi.GPIO as GPIO
+from picamera2 import Picamera2
+import degirum as dg
+import threading
+import select
 
 # Print the version of OpenCV being used
 print(f"OpenCV version: {cv2.__version__}")
+try:
+    import pygame
+    SOUND_ENABLED = True
+    print("Pygame imported successfully for sound.")
+except ImportError:
+    SOUND_ENABLED = False
+    print("Pygame not found, sound effects disabled.")
 
-# Check if running in headless mode (without display)
-HEADLESS_MODE = True  # Always run in headless mode for now
-print("Running in headless mode - terminal output only")
+# --- Configuration Constants ---
 
-# Import Raspberry Pi specific modules only in production mode
-if not DEV_MODE:
-    try:
-        from picamera2 import Picamera2
-        import RPi.GPIO as GPIO
-        print("Successfully imported Pi-specific modules")
-    except ImportError as e:
-        print(f"Error importing Pi-specific modules: {e}")
-        print("Please ensure you have the following packages installed:")
-        print("sudo apt install -y python3-libcamera python3-picamera2")
-        print("And that you're running the script with the correct Python environment")
-        raise
-
-# GPIO Pin Setup
+# GPIO Pin Setup (BCM Mode)
 RELAY_PINS = {
-    'squirt': 16,    # Squirt relay (triggers water gun)
-    'left': 6,      # Left relay (triggers for left-side movement)
-    'right': 13,    # Right relay (triggers for right-side movement)
-    'unused': 15    # Unused relay
+    'squirt': 5,  # Squirt relay (triggers water gun)
+    'left': 13,   # Left relay - controls LEFT movement
+    'right': 6,   # Right relay - controls RIGHT movement
+    'unused': 15  # Unused relay
 }
-
-# Important: Set to True if your relay module activates on LOW rather than HIGH
-RELAY_ACTIVE_LOW = True    # Many relay HATs activate on LOW signal
-
-# This flag indicates relays are "normally closed" - they're ON when not activated
-RELAY_NORMALLY_CLOSED = False  # Set to False since we're hearing the relay click when activated
-
-# IMPORTANT: The squirt relay has opposite behavior from the other relays
-# For squirt relay: HIGH = ON, LOW = OFF
-# For other relays: LOW = ON, HIGH = OFF (standard active-low relay behavior)
-SQUIRT_RELAY_ON_STATE = GPIO.HIGH   # Set to HIGH to turn the squirt relay ON
-SQUIRT_RELAY_OFF_STATE = GPIO.LOW    # Set to LOW to turn the squirt relay OFF
+RELAY_ACTIVE_LOW = True # True if relay activates on LOW signal
+# Squirt relay behavior differs from movement relays
+SQUIRT_RELAY_ON_STATE = GPIO.HIGH  # GPIO state to turn SQUIRT relay ON
+SQUIRT_RELAY_OFF_STATE = GPIO.LOW  # GPIO state to turn SQUIRT relay OFF
 
 # Model Setup
-inference_host_address = "@local"
-zoo_url = "/home/pi5/degirum_model_zoo"
-token = ""
-model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"  # YOLO11s model - larger and more accurate
+HAILO_ZOO_PATH = "/home/pi5/degirum_model_zoo" # Local path to DeGirum model zoo
+HAILO_MODEL_NAME = "yolov8s_coco--640x640_quant_hailort_hailo8l_1" # Example model - verify yours
+# HAILO_MODEL_NAME = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1" # Original model name
+HAILO_INFERENCE_ADDRESS = "@local" # Use local Hailo accelerator
 
-# Configuration
-DETECTION_THRESHOLD = 0.30  # Confidence threshold for detections (lowered from 0.40 for better recall)
-MODEL_INPUT_SIZE = (640, 640)  # YOLOv11 input size
-CENTER_THRESHOLD = 0.1  # Threshold for determining if object is left/right of center
-RELAY_SQUIRT_DURATION = 0.2  # Duration to activate squirt relay in seconds
-RELAY_SQUIRT_COOLDOWN = 1.0  # Cooldown period for squirt relay in seconds
-RELAY_HYSTERESIS_TIME = 0.5  # Minimum time between relay state changes (seconds)
-INFERENCE_INTERVAL = 0.2  # Run inference every 200ms to reduce load
-FRAME_SKIP = 3  # Process only every Nth frame for inference (higher = better FPS but less responsive)
+# Detection & Classes
+DETECTION_THRESHOLD = 0.30 # Confidence threshold
+MODEL_INPUT_SIZE = (640, 640) # Must match model input
+# COCO Class ID for 'cat' is 15, 'dog' is 16
+CLASSES_TO_DETECT = [15, 16] # Detect cats and dogs
+
+# PD Control Parameters (REQUIRES TUNING)
+PD_KP = 0.6                 # Proportional gain
+PD_KD = 0.1                 # Derivative gain
+PD_CENTER_THRESHOLD = 0.05  # Dead zone around center (+/- %)
+PD_MIN_PULSE = 0.01         # Minimum effective pulse duration (seconds)
+PD_MAX_PULSE = 0.15         # Maximum pulse duration (seconds)
+PD_MOVEMENT_COOLDOWN = 0.1  # Cooldown between movements (seconds)
+
+# Timing & Performance
+RELAY_SQUIRT_DURATION = 0.2  # Duration for squirt relay activation (seconds)
+RELAY_SQUIRT_COOLDOWN = 1.0  # Cooldown between squirts (seconds)
+FRAME_SKIP = 2               # Run inference every Nth frame (1 = every frame)
+TARGET_FPS = 30              # Target camera capture/processing FPS
+POSITION_RESET_TIME = 10.0   # Reset PD state if no detection for this long (seconds)
+
+# Camera Settings
 FRAME_WIDTH = 640
-FRAME_HEIGHT = 640  # Updated to match model input size for better accuracy
-FPS = 30  # Target FPS (updated to match VIDEO_FPS)
-DEBUG_MODE = False  # Disable debug mode for production
-VERBOSE_OUTPUT = False  # Reduce console output
-SAVE_EVERY_FRAME = False  # Only save frames with detections to reduce disk I/O
-SAVE_INTERVAL = 30  # Only save every 30th frame with detections to improve performance
-MAX_SAVED_FRAMES = 20  # Maximum number of frames to keep before overwriting old ones
-
-# Video recording configuration
-RECORD_VIDEO = True  # Enable video recording
-VIDEO_OUTPUT_DIR = "recordings"  # Directory to save videos
-VIDEO_MAX_LENGTH = 600  # Maximum video length in seconds (10 minutes)
-VIDEO_CODEC = cv2.VideoWriter_fourcc(*'mp4v')  # Use MP4 codec
-VIDEO_FPS = 30  # FPS for the recorded video (updated to match record_test_video.py)
-VIDEO_RESOLUTION = (640, 640)  # Resolution for the recorded video
-
-# Optimized camera settings for better detection in varying light conditions
+FRAME_HEIGHT = 640
 CAMERA_SETTINGS = {
-    "AeEnable": True,           # Auto exposure
-    "AwbEnable": True,          # Auto white balance
-    "AeExposureMode": 0,        # Normal exposure mode
-    "AeMeteringMode": 0,        # Center-weighted metering
-    "ExposureTime": 0,          # Let auto-exposure handle it
-    "AnalogueGain": 1.0,        # Reduced gain to prevent washout (was 1.5)
-    "Brightness": 0.0,          # Reduced brightness to prevent washout (was 0.2)
-    "Contrast": 1.3,            # Increased contrast for better definition (was 1.1)
-    "Saturation": 1.1,          # Slightly increased saturation for better color
-    "FrameRate": VIDEO_FPS,     # Set desired frame rate (using VIDEO_FPS for consistency)
-    "AeConstraintMode": 0,      # Normal constraint mode
-    "AwbMode": 1,               # Auto white balance mode (1 is typically auto)
-    "ExposureValue": 0.0        # Reduced EV compensation to prevent overexposure (was 0.5)
+    "AeEnable": True, "AwbEnable": True, "AeExposureMode": 0,
+    "AeMeteringMode": 0, "ExposureTime": 0, "AnalogueGain": 1.5,
+    "Brightness": 0.2, "Contrast": 1.1, "Saturation": 1.1,
+    "FrameRate": TARGET_FPS, "AeConstraintMode": 0, "AwbMode": 1,
+    "ExposureValue": 0.5, "NoiseReductionMode": 2
 }
 
-# Cat class names
-CAT_CLASSES = {
-    0: "Gary",
-    1: "Fred",
-    2: "George"  # Updated to match model's label for category_id 2
-}
+# Video Recording
+RECORD_VIDEO = True
+VIDEO_OUTPUT_DIR = "recordings"
+VIDEO_MAX_LENGTH = 600 # Seconds (10 minutes)
+VIDEO_CODEC = cv2.VideoWriter_fourcc(*'mp4v')
+VIDEO_FPS = TARGET_FPS # Match camera FPS
+VIDEO_RESOLUTION = (FRAME_WIDTH, FRAME_HEIGHT)
+VIDEO_START_RECORD_DURATION = 60 # Record for this many seconds after script start, even if RECORD_VIDEO is False
 
-# For COCO dataset
+# Debugging & Output
+VERBOSE_OUTPUT = False # Print detailed logs
+SAVE_DEBUG_FRAMES = False # Save frames with detections periodically
+DEBUG_FRAME_INTERVAL = 30 # Save every Nth detected frame
+MAX_SAVED_FRAMES = 20 # Max number of debug frames to keep
+
+# COCO Class Names (for labels)
 COCO_CLASSES = {
-    0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 
-    6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant', 
-    11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat', 
-    16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear', 
-    22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 
-    27: 'tie', 28: 'suitcase', 29: 'frisbee', 30: 'skis', 31: 'snowboard', 
-    32: 'sports ball', 33: 'kite', 34: 'baseball bat', 35: 'baseball glove', 
-    36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle', 
-    40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl', 
-    46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli', 
-    51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake', 56: 'chair', 
-    57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table', 61: 'toilet', 
-    62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone', 
-    68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator', 
-    73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear', 
+    0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus',
+    6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant',
+    11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat',
+    16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear',
+    22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag',
+    27: 'tie', 28: 'suitcase', 29: 'frisbee', 30: 'skis', 31: 'snowboard',
+    32: 'sports ball', 33: 'kite', 34: 'baseball bat', 35: 'baseball glove',
+    36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle',
+    40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl',
+    46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli',
+    51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake', 56: 'chair',
+    57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table', 61: 'toilet',
+    62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone',
+    68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator',
+    73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear',
     78: 'hair drier', 79: 'toothbrush'
 }
-
-# Which model to use - set to True to use YOLOv8n COCO model, False for custom cat model
-USE_COCO_MODEL = True
-
-# Which classes to detect (only used with COCO model)
-# For cats only, use [15]
-CLASSES_TO_DETECT = [15]  # Cat class ID in COCO dataset
-
-# Colors for visualization
+# Colors for bounding boxes (cycles through)
 COLORS = [
-    (0, 255, 0),     # Green for class 0
-    (255, 0, 0),     # Blue for class 1
-    (0, 0, 255),     # Red for class 2
-    (255, 255, 0),   # Cyan for class 3
-    (255, 0, 255),   # Magenta for class 4
-    (0, 255, 255),   # Yellow for class 5
-    (128, 0, 0),     # Maroon for class 6
-    (0, 128, 0),     # Dark Green for class 7
-    (0, 0, 128),     # Navy for class 8
-    (128, 128, 0),   # Olive for class 9
-    (128, 0, 128),   # Purple for class 10
-    (0, 128, 128)    # Teal for class 11
+    (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255),
+    (0, 255, 255), (128, 0, 0), (0, 128, 0), (0, 0, 128), (128, 128, 0),
+    (128, 0, 128), (0, 128, 128)
 ]
+COLOR_WHITE = (255, 255, 255)
+COLOR_RED = (0, 0, 255)
+COLOR_GREEN = (0, 255, 0)
+COLOR_YELLOW = (0, 255, 255)
 
-# Additional named colors for reference
-COLOR_NAMES = {
-    'gary': (0, 255, 0),     # Green for Gary
-    'george': (255, 0, 0),   # Blue for George
-    'fred': (0, 0, 255),     # Red for Fred
-    'white': (255, 255, 255),
-    'black': (0, 0, 0),
-    'yellow': (0, 255, 255),
-    'red': (0, 0, 255),      # Red for threshold lines and warnings
-    'green': (0, 255, 0),    # Green for FPS display
-    'unknown': (255, 255, 255)  # White for unknown cats
-}
+# Sound effects (optional)
+SOUND_FILES = ['cat1.wav', 'cat2.wav', 'cat3.wav', 'cat4.wav', 'cat5.wav', 'cat6.wav']
 
-# Global variables for tracking
-last_squirt_activation = 0
-last_action = None
-last_action_time = 0
-last_valid_overlay = None  # Stores the last valid image overlay from the model
-last_detection_time = time.time()  # Initialize to current time to prevent immediate reset
 
-# 3-Zone tracking system settings (from test_tracking.py)
-TRACKING_ZONES = {
-    'left':   {'range': (-1.0, -0.35), 'relay': 'right', 'duration': 0.05},
-    'center': {'range': (-0.35, 0.35), 'relay': None, 'duration': 0},
-    'right':  {'range': (0.35, 1.0), 'relay': 'left', 'duration': 0.05}
-}
-CURRENT_ZONE = 'center'  # Current tracking zone
-DEFAULT_MOVEMENT_COOLDOWN = 0.2  # Cooldown between movements
-MOVEMENT_COOLDOWN = DEFAULT_MOVEMENT_COOLDOWN  # Current cooldown time
-LAST_MOVEMENT_TIME = 0  # Time of last movement
-CONSECUTIVE_SAME_MOVEMENTS = 0  # Count consecutive movements in same direction
-MAX_CONSECUTIVE_MOVEMENTS = 4  # Limit consecutive movements to prevent oscillation
-POSITION_RESET_TIME = 60.0  # Time before resetting to center (was 10s)
+# --- Global State Variables ---
+last_squirt_activation = 0.0
+last_action = "Initializing"
+last_action_time = 0.0
+last_detection_time = 0.0 # Time of the last valid detection
+# PD Control State
+previous_error = 0.0        # Store the last error for derivative calculation
+last_movement_time = 0.0    # Time the last movement command was issued
+# Other State
+video_writer = None
+camera = None
+model = None
+frame_num_global = 0 # Keep track of frames for periodic saving
+# New variable for controlling program execution
+running = True
+# Flag to run sample test
+run_sample_test = False
 
-# Cache for relay states to prevent unnecessary toggling
-relay_state_cache = {
-    RELAY_PINS['squirt']: False,
-    RELAY_PINS['left']: False,
-    RELAY_PINS['right']: False
-}
-last_relay_change_time = {
-    RELAY_PINS['squirt']: 0,
-    RELAY_PINS['left']: 0,
-    RELAY_PINS['right']: 0
-}
+# --- Terminal Input Functions ---
 
-# Sound effects for development mode
-SOUND_FILES = [
-    'cat1.wav', 'cat2.wav', 'cat3.wav', 'cat4.wav', 'cat5.wav', 'cat6.wav'
-]
+def print_current_settings():
+    """Print the current PD settings to the console."""
+    print("\n--- Current PD Control Settings ---")
+    print(f"PD_KP = {PD_KP:.2f}")
+    print(f"PD_KD = {PD_KD:.2f}")
+    print(f"PD_CENTER_THRESHOLD = {PD_CENTER_THRESHOLD:.3f}")
+    print(f"PD_MIN_PULSE = {PD_MIN_PULSE:.3f}s")
+    print(f"PD_MAX_PULSE = {PD_MAX_PULSE:.3f}s")
+    print(f"PD_MOVEMENT_COOLDOWN = {PD_MOVEMENT_COOLDOWN:.3f}s")
+    print("--------------------------------")
 
-# Define GPIO pins for relay control
-RELAY_PIN_LEFT = RELAY_PINS['left']
-RELAY_PIN_RIGHT = RELAY_PINS['right']
+def print_help():
+    """Print help information for terminal controls."""
+    print("\n--- Terminal Controls ---")
+    print("q          - Quit the program")
+    print("h          - Show this help message")
+    print("t          - Run the test_model_on_sample function")
+    print("p          - Print current PD control settings")
+    print("1/2        - Decrease/Increase PD_KP")
+    print("3/4        - Decrease/Increase PD_KD")
+    print("5/6        - Decrease/Increase PD_CENTER_THRESHOLD")
+    print("7/8        - Decrease/Increase PD_MIN_PULSE")
+    print("9/0        - Decrease/Increase PD_MAX_PULSE")
+    print("-/+        - Decrease/Increase PD_MOVEMENT_COOLDOWN")
+    print("--------------------------------")
 
-# At the top of the file with other global variables (around line 200), add:
-VIDEO_START_RECORD_DURATION = 60  # Duration in seconds to record video after script starts
-
-def setup_sound():
-    """Initialize pygame mixer for sound effects"""
-    if DEV_MODE:
-        pygame.mixer.init()
-
-def play_sound():
-    """Play a random cat sound effect"""
-    if DEV_MODE:
-        sound_file = random.choice(SOUND_FILES)
-        try:
-            pygame.mixer.music.load(sound_file)
-            pygame.mixer.music.play()
-        except Exception as e:
-            print(f"Error playing sound: {e}")
-
-def setup_camera():
-    """Setup camera for capture"""
-    if DEV_MODE:
-        print("Setting up camera for development mode...")
-        camera = cv2.VideoCapture(0)
-        
-        # Set camera resolution
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-        
-        # Check if camera opened successfully
-        if not camera.isOpened():
-            print("Error: Could not open camera.")
-            sys.exit(1)
-        
-        print(f"Camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
-        return camera
-    else:
-        print("Setting up Pi camera with optimized detection settings...")
-        try:
-            from picamera2 import Picamera2
+def input_thread_function():
+    """Thread function to handle terminal input."""
+    global running, PD_KP, PD_KD, PD_CENTER_THRESHOLD, PD_MIN_PULSE, PD_MAX_PULSE, PD_MOVEMENT_COOLDOWN, run_sample_test
+    
+    print_help()
+    
+    while running:
+        # Check if there's input available (non-blocking)
+        if select.select([sys.stdin], [], [], 0.1)[0]:
+            key = sys.stdin.readline().strip()
             
-            # Create Picamera2 instance
-            picam2 = Picamera2()
-            
-            # Configure camera with improved settings for detection
-            camera_config = picam2.create_video_configuration(
-                main={
-                    "size": (FRAME_WIDTH, FRAME_HEIGHT),
-                    "format": "XBGR8888"  # Use XBGR for better color handling
-                },
-                controls=CAMERA_SETTINGS
-            )
-            
-            # Apply the configuration
-            picam2.configure(camera_config)
-            
-            # Add tuning options to improve low-light performance
-            picam2.set_controls({"NoiseReductionMode": 2})  # Enhanced noise reduction
-            
-            print(f"Pi camera initialized with resolution {FRAME_WIDTH}x{FRAME_HEIGHT}")
-            print("Camera settings:")
-            for setting, value in CAMERA_SETTINGS.items():
-                print(f"  {setting}: {value}")
-                
-            # Start the camera
-            picam2.start()
-            
-            return picam2
-        except Exception as e:
-            print(f"Error setting up Pi camera: {e}")
-            print("Please check that the camera is properly connected and enabled")
-            raise
+            if key == 'q':
+                print("Quitting program...")
+                running = False
+            elif key == 'h':
+                print_help()
+            elif key == 'p':
+                print_current_settings()
+            elif key == 't':
+                print("Running test_model_on_sample...")
+                run_sample_test = True
+            elif key == '1':
+                PD_KP = max(0.1, PD_KP - 0.1)
+                print(f"Decreased PD_KP to {PD_KP:.2f}")
+            elif key == '2':
+                PD_KP = min(2.0, PD_KP + 0.1)
+                print(f"Increased PD_KP to {PD_KP:.2f}")
+            elif key == '3':
+                PD_KD = max(0.0, PD_KD - 0.05)
+                print(f"Decreased PD_KD to {PD_KD:.2f}")
+            elif key == '4':
+                PD_KD = min(1.0, PD_KD + 0.05)
+                print(f"Increased PD_KD to {PD_KD:.2f}")
+            elif key == '5':
+                PD_CENTER_THRESHOLD = max(0.01, PD_CENTER_THRESHOLD - 0.01)
+                print(f"Decreased PD_CENTER_THRESHOLD to {PD_CENTER_THRESHOLD:.3f}")
+            elif key == '6':
+                PD_CENTER_THRESHOLD = min(0.2, PD_CENTER_THRESHOLD + 0.01)
+                print(f"Increased PD_CENTER_THRESHOLD to {PD_CENTER_THRESHOLD:.3f}")
+            elif key == '7':
+                PD_MIN_PULSE = max(0.005, PD_MIN_PULSE - 0.005)
+                print(f"Decreased PD_MIN_PULSE to {PD_MIN_PULSE:.3f}s")
+            elif key == '8':
+                PD_MIN_PULSE = min(PD_MAX_PULSE - 0.01, PD_MIN_PULSE + 0.005)
+                print(f"Increased PD_MIN_PULSE to {PD_MIN_PULSE:.3f}s")
+            elif key == '9':
+                PD_MAX_PULSE = max(PD_MIN_PULSE + 0.01, PD_MAX_PULSE - 0.01)
+                print(f"Decreased PD_MAX_PULSE to {PD_MAX_PULSE:.3f}s")
+            elif key == '0':
+                PD_MAX_PULSE = min(0.5, PD_MAX_PULSE + 0.01)
+                print(f"Increased PD_MAX_PULSE to {PD_MAX_PULSE:.3f}s")
+            elif key == '-':
+                PD_MOVEMENT_COOLDOWN = max(0.01, PD_MOVEMENT_COOLDOWN - 0.05)
+                print(f"Decreased PD_MOVEMENT_COOLDOWN to {PD_MOVEMENT_COOLDOWN:.3f}s")
+            elif key == '=':
+                PD_MOVEMENT_COOLDOWN = min(1.0, PD_MOVEMENT_COOLDOWN + 0.05)
+                print(f"Increased PD_MOVEMENT_COOLDOWN to {PD_MOVEMENT_COOLDOWN:.3f}s")
+
+
+# --- Core Functions ---
 
 def setup_gpio():
-    """Initialize GPIO pins for relays"""
-    if not DEV_MODE:
-        try:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            
-            # Initialize all pins as outputs
-            for pin in RELAY_PINS.values():
-                GPIO.setup(pin, GPIO.OUT)
-            
-            # Initialize the squirt relay to OFF state (LOW)
-            print(f"Setting SQUIRT relay (pin {RELAY_PINS['squirt']}) to LOW (OFF state)...")
-            GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
-            
-            # Initialize other relays to OFF state (HIGH for active-low relays)
-            for name, pin in RELAY_PINS.items():
-                if name != 'squirt':
-                    print(f"Setting {name} relay (pin {pin}) to HIGH (OFF state for active-low relays)...")
-                    GPIO.output(pin, GPIO.HIGH)
-            
-            print("Successfully initialized GPIO pins")
-        except Exception as e:
-            print(f"Failed to setup GPIO: {e}")
-            raise
-
-def cleanup_camera(camera):
-    """Cleanup camera based on mode"""
-    if DEV_MODE:
-        camera.release()
-    else:
-        try:
-            camera.stop()
-            GPIO.cleanup()
-        except Exception as e:
-            print(f"Error during camera cleanup: {e}")
-
-def get_frame(camera):
-    """Get frame from camera based on mode"""
-    if DEV_MODE:
-        ret, frame = camera.read()
-        if not ret:
-            raise Exception("Failed to grab frame from webcam")
-        # Resize frame to match model input size
-        frame = cv2.resize(frame, MODEL_INPUT_SIZE)
-        return frame
-    else:
-        try:
-            frame = camera.capture_array()
-            
-            # Handle different color formats
-            if frame.shape[2] == 4:  # If it has 4 channels (XBGR)
-                # Convert XBGR to BGR by dropping the X channel
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-            else:
-                # Convert RGB to BGR for OpenCV if needed
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                
-            # Always resize the frame to the model input size
-            frame = cv2.resize(frame, MODEL_INPUT_SIZE)
-            return frame
-        except Exception as e:
-            print(f"Failed to capture frame from Pi camera: {e}")
-            raise
-
-def process_detections(frame, results):
-    """Process detection results and return detections list"""
-    detections = []
-    
-    if DEV_MODE:
-        for result in results:
-            for box in result.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                score = float(box.conf[0])
-                class_id = int(box.cls[0])
-                # Create dictionary format for consistency
-                detections.append({
-                    'bbox': (x1, y1, x2, y2),
-                    'score': score,
-                    'category_id': class_id,
-                    'label': COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
-                })
-    else:
-        # Process Degirum results
-        try:
-            # YOLO11s model sometimes returns results directly in 'results' and sometimes in 'results.results'
-            if hasattr(results, 'results') and results.results:
-                result_list = results.results
-                if VERBOSE_OUTPUT:
-                    print(f"Processing {len(result_list)} detections from results.results")
-            elif hasattr(results, 'results') and isinstance(results.results, list):
-                result_list = results.results
-                if VERBOSE_OUTPUT:
-                    print(f"Processing {len(result_list)} detections from results.results list")
-            elif isinstance(results, list):
-                result_list = results
-                if VERBOSE_OUTPUT:
-                    print(f"Processing {len(result_list)} detections from direct results list")
-            else:
-                # No clear list of results found
-                result_list = []
-                if hasattr(results, '__dict__'):
-                    if VERBOSE_OUTPUT:
-                        print(f"Results attributes: {list(results.__dict__.keys())}")
-            
-            # Process detections from the result list
-            for detection in result_list:
-                try:
-                    # Try multiple approaches to extract bounding box information
-                    x1, y1, x2, y2, score, class_id = None, None, None, None, None, None
-                    
-                    # Method 1: Direct dictionary access
-                    if isinstance(detection, dict):
-                        if 'bbox' in detection:
-                            bbox = detection['bbox']
-                            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                                x1, y1, x2, y2 = map(int, bbox)
-                            
-                            score = float(detection.get('score', detection.get('confidence', 0.0)))
-                            
-                            # Get class ID depending on the model format
-                            class_id = int(detection.get('category_id', detection.get('class_id', 0)))
-                    
-                    # Method 2: Object attribute access
-                    elif hasattr(detection, 'bbox'):
-                        bbox = detection.bbox
-                        
-                        # Handle different bbox formats
-                        if hasattr(bbox, 'x1') and hasattr(bbox, 'y1') and hasattr(bbox, 'x2') and hasattr(bbox, 'y2'):
-                            x1, y1, x2, y2 = int(bbox.x1), int(bbox.y1), int(bbox.x2), int(bbox.y2)
-                        elif hasattr(bbox, '__getitem__') and len(bbox) == 4:
-                            x1, y1, x2, y2 = map(int, bbox)
-                        
-                        # Get score and class ID
-                        if hasattr(detection, 'score'):
-                            score = float(detection.score)
-                        elif hasattr(detection, 'confidence'):
-                            score = float(detection.confidence)
-                        
-                        if hasattr(detection, 'class_id'):
-                            class_id = int(detection.class_id)
-                        elif hasattr(detection, 'category_id'):
-                            class_id = int(detection.category_id)
-                    
-                    # Skip invalid or incomplete detections
-                    if None in (x1, y1, x2, y2, score, class_id):
-                        continue
-                    
-                    # For COCO model, filter for cat class only
-                    if USE_COCO_MODEL and class_id not in CLASSES_TO_DETECT:
-                        continue
-                    
-                    # Add detection if it meets threshold
-                    if score >= DETECTION_THRESHOLD:
-                        # Make sure coordinates are within image bounds
-                        height, width = frame.shape[:2]
-                        x1 = max(0, min(width-1, x1))
-                        y1 = max(0, min(height-1, y1))
-                        x2 = max(0, min(width-1, x2))
-                        y2 = max(0, min(height-1, y2))
-                        
-                        # Only add if the box has reasonable size
-                        if x2 > x1 and y2 > y1 and (x2-x1)*(y2-y1) > 100:  # Minimum area of 100 pixels
-                            # Create a detection dictionary for consistent handling
-                            detection_dict = {
-                                'bbox': (x1, y1, x2, y2),
-                                'score': score,
-                                'category_id': class_id,
-                                'label': COCO_CLASSES.get(class_id, f"Unknown class {class_id}") if USE_COCO_MODEL else CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-                            }
-                            detections.append(detection_dict)
-                            
-                            if VERBOSE_OUTPUT:
-                                print(f"Added detection: bbox={x1},{y1},{x2},{y2}, score={score:.2f}, class={class_id}")
-                
-                except Exception as e:
-                    if DEBUG_MODE:
-                        print(f"Error processing detection: {e}")
-            
-            # If we have no detections but have a model overlay image, store it for reference
-            if len(detections) == 0 and hasattr(results, 'image_overlay') and results.image_overlay is not None:
-                # Store the overlay for display
-                global last_valid_overlay
-                last_valid_overlay = results.image_overlay
-                
-                if VERBOSE_OUTPUT:
-                    print("No detections found above threshold")
-        
-        except Exception as e:
-            if DEBUG_MODE:
-                print(f"Error processing detection results: {e}")
-                import traceback
-                traceback.print_exc()
-    
-    if VERBOSE_OUTPUT:
-        print(f"Returning {len(detections)} processed detections")
-    return detections
-
-def activate_relay(pin, duration=0.1):
-    """Activate a relay for the specified duration"""
-    global last_action, last_action_time
-    
-    if not DEV_MODE:
-        try:
-            # Debug output
-            if DEBUG_MODE:
-                print(f"Activating relay on pin {pin} for {duration:.2f} seconds")
-            
-            # Turn ON the relay
-            if pin == RELAY_PINS['squirt']:
-                # Squirt relay: HIGH = ON, LOW = OFF
-                GPIO.output(pin, SQUIRT_RELAY_ON_STATE)
-                if DEBUG_MODE:
-                    print(f"  Set squirt relay to ON state: {SQUIRT_RELAY_ON_STATE}")
-            else:
-                # Standard relays: active-low behavior (LOW = ON, HIGH = OFF)
-                active_state = GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH
-                GPIO.output(pin, active_state)
-                if DEBUG_MODE:
-                    print(f"  Set relay to active state: {active_state}")
-            
-            # Update last action information
-            current_time = time.time()
-            if pin == RELAY_PINS['squirt']:
-                last_action = "SQUIRT!"
-            elif pin == RELAY_PINS['left']:
-                last_action = "MOVE LEFT!"
-            elif pin == RELAY_PINS['right']:
-                last_action = "MOVE RIGHT!"
-            last_action_time = current_time
-            
-            # Wait for the specified duration
-            time.sleep(duration)
-            
-            # Turn OFF the relay
-            if pin == RELAY_PINS['squirt']:
-                GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
-                if DEBUG_MODE:
-                    print(f"  Set squirt relay to OFF state: {SQUIRT_RELAY_OFF_STATE}")
-            else:
-                inactive_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
-                GPIO.output(pin, inactive_state)
-                if DEBUG_MODE:
-                    print(f"  Set relay to inactive state: {inactive_state}")
-                
-            return True
-        except Exception as e:
-            print(f"Error activating relay {pin}: {e}")
-            return False
-    else:
-        # In dev mode, just simulate the relay activation with messages and sound
-        if pin == RELAY_PINS['squirt']:
-            last_action = "SQUIRT!"
-            print("Squirt!")
-            play_sound()
-        elif pin == RELAY_PINS['left']:
-            last_action = "MOVE LEFT!"
-            print("Move Left!")
-        elif pin == RELAY_PINS['right']:
-            last_action = "MOVE RIGHT!"
-            print("Move Right!")
-        
-        current_time = time.time()
-        last_action_time = current_time
-        time.sleep(duration)  # Simulate the duration
-        return True
-
-def handle_detection(bbox, frame_width):
-    """Handle detection using the 3-zone tracking approach from test_tracking.py"""
-    global last_squirt_activation, CURRENT_ZONE, LAST_MOVEMENT_TIME, CONSECUTIVE_SAME_MOVEMENTS, MOVEMENT_COOLDOWN, last_detection_time
-    
-    # Calculate center point and relative position
-    x1, y1, x2, y2 = map(int, bbox)
-    center_x = (x1 + x2) / 2
-    
-    # Calculate relative position (-1.0 to 1.0 range)
-    relative_position = ((center_x / frame_width) - 0.5) * 2
-    
-    # Update last detection time
-    last_detection_time = time.time()
-    
-    # Check if cooldown period has passed
-    current_time = time.time()
-    
-    # Determine which zone the object is in
-    detected_zone = None
-    for zone_name, zone_data in TRACKING_ZONES.items():
-        min_pos, max_pos = zone_data['range']
-        if min_pos <= relative_position <= max_pos:
-            detected_zone = zone_name
-            break
-    
-    # Failsafe for out-of-bounds values
-    if detected_zone is None:
-        if relative_position < -1.0:
-            detected_zone = 'left'
-        else:
-            detected_zone = 'right'
-    
-    # Only change zones if it's different and cooldown period has passed
-    if detected_zone != CURRENT_ZONE and current_time - LAST_MOVEMENT_TIME >= MOVEMENT_COOLDOWN:
-        if DEBUG_MODE:
-            print(f"Object detected in {detected_zone} zone (position: {relative_position:.2f})")
-        
-        # Check if we're moving in the same direction as before
-        current_relay = TRACKING_ZONES[detected_zone]['relay'] if detected_zone != 'center' else None
-        previous_relay = TRACKING_ZONES[CURRENT_ZONE]['relay'] if CURRENT_ZONE != 'center' else None
-        
-        if current_relay == previous_relay and current_relay is not None:
-            CONSECUTIVE_SAME_MOVEMENTS += 1
-            if DEBUG_MODE:
-                print(f"Consecutive movement #{CONSECUTIVE_SAME_MOVEMENTS} in same direction")
-        else:
-            CONSECUTIVE_SAME_MOVEMENTS = 0
-        
-        # Get the relay and duration for this zone
-        zone_data = TRACKING_ZONES[detected_zone]
-        relay_name = zone_data['relay']
-        duration = zone_data['duration']
-        
-        # Stop movements if we've made too many consecutive moves in same direction
-        if CONSECUTIVE_SAME_MOVEMENTS >= MAX_CONSECUTIVE_MOVEMENTS:
-            if DEBUG_MODE:
-                print(f"Limiting movement after {CONSECUTIVE_SAME_MOVEMENTS} consecutive moves in same direction")
-            relay_name = None
-            CONSECUTIVE_SAME_MOVEMENTS = 0
-            # Longer cooldown after limiting movement
-            MOVEMENT_COOLDOWN = 1.0
-        
-        # Activate squirt relay if cooldown period has passed
-        if current_time - last_squirt_activation >= RELAY_SQUIRT_COOLDOWN:
-            activate_relay(RELAY_PINS['squirt'], RELAY_SQUIRT_DURATION)
-            last_squirt_activation = current_time
-        
-        # Take action if needed
-        if relay_name and duration > 0:
-            if DEBUG_MODE:
-                print(f"Moving {relay_name} for {duration:.3f}s (zone {detected_zone})")
-            activate_relay(RELAY_PINS[relay_name], duration)
-            LAST_MOVEMENT_TIME = current_time
-        
-        # Update current zone
-        CURRENT_ZONE = detected_zone
-    
-    return relative_position
-
-def draw_overlay(frame, relative_position=None):
-    """Draw visual indicators on the frame showing the 3-zone tracking system"""
-    height, width = frame.shape[:2]
-    center_x = width // 2
-    
-    # Draw center line
-    cv2.line(frame, (center_x, 0), (center_x, height), COLOR_NAMES['yellow'], 1)
-    
-    # Draw zone boundaries based on TRACKING_ZONES
-    left_boundary = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][0])
-    right_boundary = int(center_x + (width / 2) * TRACKING_ZONES['center']['range'][1])
-    
-    # Draw zone boundaries
-    cv2.line(frame, (left_boundary, 0), (left_boundary, height), COLOR_NAMES['green'], 2)
-    cv2.line(frame, (right_boundary, 0), (right_boundary, height), COLOR_NAMES['green'], 2)
-    
-    # Add zone labels if debug mode is enabled
-    if DEBUG_MODE:
-        cv2.putText(frame, "LEFT", (left_boundary - 120, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_NAMES['red'], 2)
-        cv2.putText(frame, "CENTER", (center_x - 40, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_NAMES['green'], 2)
-        cv2.putText(frame, "RIGHT", (right_boundary + 40, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_NAMES['red'], 2)
-    
-    # Draw position indicator if available
-    if relative_position is not None:
-        # Calculate position marker on screen
-        position_x = int(center_x + (width / 2) * relative_position)
-        
-        # Draw position marker
-        cv2.circle(frame, (position_x, height - 30), 8, COLOR_NAMES['yellow'], -1)
-        
-        # Draw target zone (center)
-        cv2.rectangle(frame, (left_boundary, height - 40), (right_boundary, height - 20), COLOR_NAMES['green'], 2)
-        
-        # Add position text
-        pos_text = f"Position: {relative_position:.2f}"
-        cv2.putText(frame, pos_text, (10, height - 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['white'], 2)
-        
-        # Add zone info
-        zone_text = f"Zone: {CURRENT_ZONE.upper()}"
-        cv2.putText(frame, zone_text, (10, height - 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['white'], 2)
-        
-        # Add consecutive movement counter in debug mode
-        if DEBUG_MODE:
-            consecutive_text = f"Consecutive: {CONSECUTIVE_SAME_MOVEMENTS}/{MAX_CONSECUTIVE_MOVEMENTS}"
-            cv2.putText(frame, consecutive_text, (10, height - 120),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['yellow'], 2)
-    
-    # Show last action if within last 2 seconds
-    if last_action and time.time() - last_action_time < 2:
-        cv2.putText(frame, last_action, (10, height - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLOR_NAMES['red'], 2)
-
-def load_model():
-    """Load the YOLO model for detection."""
+    """Initialize GPIO pins for relays."""
     try:
-        print(f"Loading YOLO model: {model_name}")
-        model_to_load = model_name
-        zoo_path = zoo_url
+        GPIO.setmode(GPIO.BCM) # Use Broadcom pin numbers
+        GPIO.setwarnings(False)
+
+        # Initialize all relay pins as outputs
+        for pin in RELAY_PINS.values():
+            GPIO.setup(pin, GPIO.OUT)
+
+        # Set squirt relay to OFF state (LOW)
+        print(f"Setting SQUIRT relay (pin {RELAY_PINS['squirt']}) to OFF state (LOW)...")
+        GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)  # LOW
+
+        # Set movement and unused relays to OFF state (HIGH for active-low)
+        for name, pin in RELAY_PINS.items():
+            if name not in ['squirt']:  # Skip the squirt relay (already set)
+                off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+                print(f"Setting {name} relay (pin {pin}) to OFF state ({'HIGH' if off_state == GPIO.HIGH else 'LOW'})...")
+                GPIO.output(pin, off_state)
+
+        print("GPIO Initialized.")
+        print(f"Relay Pins: {RELAY_PINS}")
+        print(f"Relays Active Low: {RELAY_ACTIVE_LOW}")
+        print(f"Squirt Relay: ON=HIGH, OFF=LOW")
+        print(f"Movement Relays: ON=LOW, OFF=HIGH (active-low)")
+
+    except Exception as e:
+        print(f"CRITICAL: Error initializing GPIO: {e}")
+        print("Check GPIO connections and permissions.")
+        raise # Propagate error to stop execution if GPIO fails
+
+def setup_camera():
+    """Setup PiCamera2 for capture."""
+    print("Setting up Pi camera...")
+    try:
+        picam2 = Picamera2()
         
-        import degirum as dg
+        # Configure the camera with optimized settings for detection
+        camera_config = picam2.create_video_configuration(
+            main={
+                "size": (FRAME_WIDTH, FRAME_HEIGHT),
+                "format": "XBGR8888"  # Use XBGR format for better handling with OpenCV
+            },
+            controls=CAMERA_SETTINGS
+        )
         
-        # Create logs directory for HailoRT logs
-        os.makedirs("logs", exist_ok=True)
-        os.chmod("logs", 0o777)  # Ensure write permissions
+        picam2.configure(camera_config)
         
-        # Redirect HailoRT logs
-        os.environ["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), "logs")
+        # Add noise reduction settings if supported
+        try:
+            picam2.set_controls({"NoiseReductionMode": 2})  # Enhanced noise reduction
+        except Exception as nr_e:
+            print(f"Note: Could not set noise reduction mode: {nr_e}")
         
-        # Check if model zoo path exists
+        print(f"Pi camera configured: {FRAME_WIDTH}x{FRAME_HEIGHT} @ {TARGET_FPS} FPS")
+        print("Applied Camera Settings:")
+        for setting, value in CAMERA_SETTINGS.items():
+            print(f"  {setting}: {value}")
+        
+        # Start the camera
+        picam2.start()
+        print("Camera startup initiated...")
+        
+        # Wait for camera to initialize
+        time.sleep(2.0)  # Allow camera more time to stabilize
+        
+        # Verify camera is working by capturing a test frame
+        try:
+            test_frame = picam2.capture_array()
+            print(f"Test frame captured: {test_frame.shape} (shape should match target resolution)")
+            if test_frame.shape[0] != FRAME_HEIGHT or test_frame.shape[1] != FRAME_WIDTH:
+                print(f"Warning: Test frame size {test_frame.shape[:2]} doesn't match target {(FRAME_HEIGHT, FRAME_WIDTH)}")
+        except Exception as tf_e:
+            print(f"Warning: Could not capture test frame: {tf_e}")
+        
+        print("Camera started successfully.")
+        return picam2
+        
+    except Exception as e:
+        print(f"CRITICAL: Error setting up Pi camera: {e}")
+        print("Check camera connection, configuration, and libcamera support.")
+        traceback.print_exc()
+        raise
+
+def setup_sound():
+    """Initialize pygame mixer for sound effects if available."""
+    if SOUND_ENABLED:
+        try:
+            pygame.mixer.init()
+            print("Pygame mixer initialized for sound.")
+        except Exception as e:
+            print(f"Warning: Failed to initialize pygame mixer: {e}")
+            return False
+        return True
+    return False
+
+def load_model(model_name, zoo_path):
+    """Load the specified Degirum model."""
+    try:
+        print(f"Loading Degirum model: {model_name} from {zoo_path}")
+
+        # Create logs directory for HailoRT logs if it doesn't exist
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        os.chmod(log_dir, 0o777) # Ensure write permissions
+        os.environ["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), log_dir)
+        print(f"HailoRT logs redirected to: {os.environ['HAILORT_LOG_PATH']}")
+
+
         if not os.path.exists(zoo_path):
             print(f"ERROR: Model zoo path not found: {zoo_path}")
-            print("Please check that the path is correct and the directory exists.")
             return None
-            
-        print(f"Model zoo path verified: {zoo_path}")
-        
-        # Check if the specific model path exists
-        specific_model_path = os.path.join(zoo_path, model_to_load)
-        if os.path.exists(specific_model_path):
-            print(f"Found model at: {specific_model_path}")
-        else:
-            print(f"WARNING: Specific model path not found: {specific_model_path}")
-            
-            # List all available models
-            try:
-                available_models = [f for f in os.listdir(zoo_path) if f.endswith(".hef") or os.path.isdir(os.path.join(zoo_path, f))]
-                print(f"Available models in {zoo_path}:")
-                for model in available_models:
-                    print(f"  - {model}")
-                
-                # Try to use an alternative model if available
-                if available_models and model_to_load not in available_models:
-                    # Prefer YOLOv8 models if available
-                    yolo_models = [m for m in available_models if 'yolo' in m.lower()]
-                    if yolo_models:
-                        model_to_load = yolo_models[0]
-                        print(f"Auto-selecting alternative model: {model_to_load}")
-            except Exception as e:
-                print(f"Warning: Could not list contents of model zoo directory: {e}")
-        
-        # Load the model with minimal parameters to avoid compatibility issues
-        model = dg.load_model(
-            model_name=model_to_load,
-            inference_host_address=inference_host_address,
+
+        # Construct the full path to the model file (assuming .hef extension)
+        # Degirum usually handles finding the .hef within the named folder
+        model_path_check = os.path.join(zoo_path, model_name)
+        if not os.path.exists(model_path_check):
+             print(f"Warning: Model directory not found at {model_path_check}. Degirum will try to find it.")
+             # List available models for easier debugging if needed
+             try:
+                 print("Available models/folders in zoo:")
+                 for item in os.listdir(zoo_path):
+                     print(f" - {item}")
+             except Exception as list_e:
+                 print(f"Could not list zoo contents: {list_e}")
+
+        loaded_model = dg.load_model(
+            model_name=model_name,
+            inference_host_address=HAILO_INFERENCE_ADDRESS,
             zoo_url=zoo_path,
-            output_confidence_threshold=DETECTION_THRESHOLD
+            output_confidence_threshold=DETECTION_THRESHOLD # Set confidence here
+            # Removed overlay params for simplicity, handled by opencv drawing
         )
-        
-        print(f"Model loaded successfully with confidence threshold: {DETECTION_THRESHOLD}")
-        
-        return model
-        
+        print(f"Model '{model_name}' loaded successfully.")
+        return loaded_model
+
     except Exception as e:
-        print(f"Failed to load model: {str(e)}")
-        print("Detailed error traceback:")
-        import traceback
+        print(f"CRITICAL: Failed to load model '{model_name}': {e}")
         traceback.print_exc()
         return None
 
-def load_fallback_model():
-    """Try to load a generic model just to test if DeGirum is working"""
+def load_fallback_model(zoo_path):
+    """Try loading common fallback models if the primary fails."""
+    print("Attempting to load a fallback model...")
+    fallback_models = [ # List potential models in your zoo
+        "yolov5s_coco--640x640_quant_hailort_hailo8l_1",
+        "yolov8n_coco--640x640_quant_hailort_hailo8l_1",
+        # Add other models present in your zoo_path if needed
+    ]
+    for model_name in fallback_models:
+         if model_name == HAILO_MODEL_NAME: continue # Skip the one that failed
+         model = load_model(model_name, zoo_path)
+         if model:
+             print(f"Successfully loaded fallback model: {model_name}")
+             return model
+    print("ERROR: Could not load any fallback models.")
+    return None
+
+
+def read_frame(camera_instance):
+    """Capture and return a frame from the PiCamera2 instance."""
     try:
-        print("Attempting to load a fallback model...")
-        import degirum as dg
+        # Capture frame as numpy array
+        frame = camera_instance.capture_array()
         
-        # Use the local zoo path
-        zoo_path = "/home/pi5/degirum_model_zoo"
+        # Handle different color formats that Picamera2 might return
+        if frame.shape[2] == 4:  # If it has 4 channels (XBGR or XRGB)
+            # Convert XBGR to BGR by dropping the X channel
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        elif frame.shape[2] == 3:  # If it's RGB (3 channels)
+            # Convert RGB to BGR for OpenCV processing and display
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         
-        # Try to list all models in the directory
-        try:
-            print(f"Looking for fallback models in: {zoo_path}")
-            available_models = os.listdir(zoo_path)
-            print(f"Available models: {available_models}")
-            
-            # Filter for .hef models or other known model formats
-            potential_models = []
-            for model_name in available_models:
-                # Add any model that looks like a compiled model
-                if model_name != "yolov8n_coco--640x640_quant_hailort_hailo8l_1":  # Skip the main model that failed
-                    potential_models.append(model_name)
-            
-            # Try each potential model
-            for model_name in potential_models:
-                try:
-                    print(f"Trying to load fallback model: {model_name}")
-                    model = dg.load_model(
-                        model_name=model_name,
-                        inference_host_address=inference_host_address,
-                        zoo_url=zoo_path,
-                        output_confidence_threshold=DETECTION_THRESHOLD
-                        # No overlay parameters to avoid compatibility issues
-                    )
-                    print(f"Successfully loaded fallback model: {model_name}")
-                    return model
-                except Exception as e:
-                    print(f"Failed to load {model_name}: {e}")
-                    continue
-        except Exception as e:
-            print(f"Failed to list models in directory: {e}")
-        
-        # If local models fail, try models from the public repository
-        generic_models = [
-            "yolov8n", 
-            "yolov8n_coco", 
-            "yolov5n_coco",
-            "yolov7_tiny_coco",
-            "mobilenet_v2_ssd_coco"
-        ]
-        
-        print("Trying models from the public repository...")
-        for generic_model in generic_models:
-            try:
-                print(f"Trying to load generic model: {generic_model}")
-                model = dg.load_model(
-                    model_name=generic_model,
-                    inference_host_address=inference_host_address,
-                    zoo_url="degirum/public",  # Use public model zoo
-                    output_confidence_threshold=DETECTION_THRESHOLD
-                    # No overlay parameters to avoid compatibility issues
-                )
-                print(f"Successfully loaded fallback model: {generic_model}")
-                return model
-            except Exception as e:
-                print(f"Failed to load {generic_model}: {e}")
-                continue
-        
-        print("Could not load any fallback models")
-        return None
+        # Verify shape
+        if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
+            # Resize if somehow the shape is wrong (shouldn't happen with config)
+            frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+            if VERBOSE_OUTPUT: print("Warning: Resized frame in read_frame")
+
+        return frame
     except Exception as e:
-        print(f"Error in load_fallback_model: {e}")
+        print(f"Error capturing frame: {e}")
+        # Return None on error, allowing the main loop to handle it
         return None
+
+def activate_relay(pin, duration):
+    """
+    Activates a specific relay for a given duration (in seconds).
+    Handles differences in ON/OFF states for squirt vs. other relays.
+    """
+    global last_action, last_action_time # Update global state for display
+
+    relay_name = "UNKNOWN"
+    for name, p in RELAY_PINS.items():
+        if p == pin:
+            relay_name = name.upper()
+            break
+
+    try:
+        # Determine ON/OFF GPIO levels
+        if pin == RELAY_PINS['squirt']:
+            # Squirt relay: HIGH = ON, LOW = OFF
+            on_state = SQUIRT_RELAY_ON_STATE  # HIGH
+            off_state = SQUIRT_RELAY_OFF_STATE  # LOW
+            action_prefix = "SQUIRT"
+        else:
+            # Standard active-low movement relays: LOW = ON, HIGH = OFF
+            on_state = GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH
+            off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+            action_prefix = f"MOVE {relay_name}"
+
+        # Activate
+        GPIO.output(pin, on_state)
+        action_msg = f"{action_prefix} ON ({duration:.3f}s)"
+        if VERBOSE_OUTPUT: print(f"  Relay {relay_name} (Pin {pin}) -> ON (State {'HIGH' if on_state == GPIO.HIGH else 'LOW'})")
+
+        # Update global state immediately for drawing function
+        current_time = time.time()
+        last_action = action_msg
+        last_action_time = current_time
+
+        # Wait
+        time.sleep(duration)
+
+        # Deactivate
+        GPIO.output(pin, off_state)
+        if VERBOSE_OUTPUT: print(f"  Relay {relay_name} (Pin {pin}) -> OFF (State {'HIGH' if off_state == GPIO.HIGH else 'LOW'})")
+
+    except Exception as e:
+        print(f"Error activating relay {relay_name} (Pin {pin}): {e}")
+        # Ensure relay is turned off in case of error during sleep
+        try:
+             GPIO.output(pin, off_state)
+        except Exception as e_off:
+             print(f"  Error ensuring relay off: {e_off}")
+
+
+def process_detections(frame, model_results):
+    """
+    Processes raw detection results from the Degirum model.
+    Returns a list of detection dictionaries:
+    [{'bbox': (x1, y1, x2, y2), 'score': score, 'category_id': class_id, 'label': label}, ...]
+    Handles potential variations in Degirum result object structure.
+    """
+    detections = []
+    height, width = frame.shape[:2]
+
+    try:
+        # Print raw results type for debugging
+        if VERBOSE_OUTPUT:
+            print(f"Raw results type: {type(model_results)}")
+            if hasattr(model_results, 'results'):
+                print(f"Results has 'results' attribute with {len(model_results.results)} items")
+                
+        # --- Process different result structures ---
+        if hasattr(model_results, 'results') and isinstance(model_results.results, list):
+            # Standard DeGirum output format with results attribute containing list
+            result_list = model_results.results
+            if VERBOSE_OUTPUT: 
+                print(f"Processing {len(result_list)} detections from results.results list")
+                
+                # Debug: Print structure of first result
+                if result_list and isinstance(result_list[0], dict):
+                    print(f"First result keys: {list(result_list[0].keys())}")
+                    
+            # Process individual results in the list
+            for detection_result in result_list:
+                # Format 1: Dictionary with 'detections' key
+                if isinstance(detection_result, dict) and 'detections' in detection_result:
+                    for det in detection_result['detections']:
+                        if 'bbox' in det and ('score' in det or 'confidence' in det) and ('class_id' in det or 'category_id' in det):
+                            bbox = det['bbox']
+                            score = float(det.get('score', det.get('confidence', 0.0)))
+                            class_id = int(det.get('class_id', det.get('category_id', -1)))
+                            
+                            if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+                                # Process valid detection
+                                x1, y1, x2, y2 = map(int, bbox)
+                                
+                                # Validate coordinates
+                                x1 = max(0, min(width - 1, x1))
+                                y1 = max(0, min(height - 1, y1))
+                                x2 = max(0, min(width - 1, x2))
+                                y2 = max(0, min(height - 1, y2))
+                                
+                                # Skip invalid boxes
+                                if x2 <= x1 or y2 <= y1:
+                                    continue
+                                    
+                                label = COCO_CLASSES.get(class_id, f"ClassID {class_id}")
+                                detections.append({
+                                    'bbox': (x1, y1, x2, y2),
+                                    'score': score,
+                                    'category_id': class_id,
+                                    'label': label
+                                })
+                
+                # Format 2: Dictionary with 'data' key (YOLO-style output)
+                elif isinstance(detection_result, dict) and 'data' in detection_result:
+                    data = detection_result['data']
+                    
+                    if isinstance(data, np.ndarray):
+                        # Determine the format based on shape
+                        if len(data.shape) == 4:  # [batch, grid_h, grid_w, values]
+                            data = data.reshape(-1, data.shape[-1])
+                        elif len(data.shape) == 3:  # [grid_h, grid_w, values]
+                            data = data.reshape(-1, data.shape[-1])
+                            
+                        # Format 2a: Each row is [x1, y1, x2, y2, score, class_id]
+                        if data.shape[1] == 6:
+                            for box_data in data:
+                                x1, y1, x2, y2, score, class_id = box_data
+                                
+                                # Convert to proper types
+                                class_id = int(class_id)
+                                score = float(score)
+                                
+                                if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+                                    # Convert coordinates if normalized (0-1)
+                                    if 0 <= x1 <= 1 and 0 <= y1 <= 1 and 0 <= x2 <= 1 and 0 <= y2 <= 1:
+                                        x1 *= width
+                                        y1 *= height
+                                        x2 *= width
+                                        y2 *= height
+                                        
+                                    # Convert to integers and validate
+                                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                                    x1 = max(0, min(width - 1, x1))
+                                    y1 = max(0, min(height - 1, y1))
+                                    x2 = max(0, min(width - 1, x2))
+                                    y2 = max(0, min(height - 1, y2))
+                                    
+                                    # Skip invalid boxes
+                                    if x2 <= x1 or y2 <= y1:
+                                        continue
+                                        
+                                    label = COCO_CLASSES.get(class_id, f"ClassID {class_id}")
+                                    detections.append({
+                                        'bbox': (x1, y1, x2, y2),
+                                        'score': score,
+                                        'category_id': class_id,
+                                        'label': label
+                                    })
+                        
+                        # Format 2b: Each row has objectness + class scores
+                        elif data.shape[1] > 5:  # [x_center, y_center, width, height, objectness, class_scores...]
+                            for box_data in data:
+                                objectness = box_data[4]
+                                
+                                if objectness >= DETECTION_THRESHOLD:
+                                    # Find max class score and its index
+                                    class_scores = box_data[5:]
+                                    class_id = np.argmax(class_scores)
+                                    score = float(class_scores[class_id])
+                                    
+                                    if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+                                        # Convert center format to corner format
+                                        x_center, y_center, width, height = box_data[0:4]
+                                        
+                                        # Convert normalized coordinates if needed
+                                        if 0 <= x_center <= 1 and 0 <= y_center <= 1 and 0 <= width <= 1 and 0 <= height <= 1:
+                                            x_center *= width
+                                            y_center *= height
+                                            box_width = width * width
+                                            box_height = height * height
+                                        else:
+                                            box_width = width
+                                            box_height = height
+                                            
+                                        # Calculate corners
+                                        x1 = int(x_center - box_width / 2)
+                                        y1 = int(y_center - box_height / 2)
+                                        x2 = int(x_center + box_width / 2)
+                                        y2 = int(y_center + box_height / 2)
+                                        
+                                        # Validate coordinates
+                                        x1 = max(0, min(width - 1, x1))
+                                        y1 = max(0, min(height - 1, y1))
+                                        x2 = max(0, min(width - 1, x2))
+                                        y2 = max(0, min(height - 1, y2))
+                                        
+                                        # Skip invalid boxes
+                                        if x2 <= x1 or y2 <= y1:
+                                            continue
+                                            
+                                        label = COCO_CLASSES.get(class_id, f"ClassID {class_id}")
+                                        detections.append({
+                                            'bbox': (x1, y1, x2, y2),
+                                            'score': score,
+                                            'category_id': class_id,
+                                            'label': label
+                                        })
+        
+        # For any other object structures that might need handling 
+        else:
+            if isinstance(model_results, list):
+                # Direct list of detections
+                result_list = model_results
+                if VERBOSE_OUTPUT: print(f"Processing {len(result_list)} detections from direct results list")
+            else:
+                # Fallback or handle other structures if necessary
+                result_list = []
+                if VERBOSE_OUTPUT: 
+                    print(f"Warning: Unexpected model result type: {type(model_results)}")
+                    if hasattr(model_results, '__dict__'):
+                        print(f"Result attributes: {list(model_results.__dict__.keys())}")
+
+    except Exception as e:
+        print(f"Error processing model results: {e}")
+        import traceback
+        traceback.print_exc()
+
+    if detections:
+        print(f"Found {len(detections)} valid detections")
+        
+    # Sort detections by confidence (highest first) - useful for focusing on one target
+    detections.sort(key=lambda d: d['score'], reverse=True)
+
+    return detections
+
+
+def handle_pd_control(bbox, frame_width):
+    """
+    Handles movement based on target position using a simpler zone-based approach 
+    with PD control for smoother movement.
+    Activates squirt function independently.
+    Returns the calculated error for visualization.
+    """
+    global previous_error, last_movement_time, last_action, last_action_time
+    global last_squirt_activation, last_detection_time
+
+    x1, y1, x2, y2 = map(int, bbox)
+    center_x = (x1 + x2) / 2
+    current_time = time.time()
+
+    # Update last detection time (used for inactivity reset)
+    last_detection_time = current_time
+
+    # --- Squirt Logic (Independent of Centering) ---
+    if current_time - last_squirt_activation >= RELAY_SQUIRT_COOLDOWN:
+        print(f"Target detected! Activating squirt relay for {RELAY_SQUIRT_DURATION:.2f}s")
+        # Play sound effect if enabled and available
+        if SOUND_ENABLED and SOUND_FILES:
+             try:
+                 sound_file = random.choice(SOUND_FILES)
+                 sound = pygame.mixer.Sound(sound_file)
+                 sound.play()
+             except Exception as sound_e:
+                 print(f"Warning: Could not play sound {sound_file}: {sound_e}")
+        # Activate squirt relay
+        activate_relay(RELAY_PINS['squirt'], RELAY_SQUIRT_DURATION) # activate_relay updates last_action
+        last_squirt_activation = current_time # Update squirt cooldown timer
+
+    # --- Zone-Based Tracking with PD Smoothing ---
+    # Calculate normalized error (-1.0 to 1.0)
+    current_error = ((center_x / frame_width) - 0.5) * 2
+    
+    # Calculate the derivative component for smoother transitions
+    error_derivative = current_error - previous_error
+    previous_error = current_error
+    
+    # Define tracking zones
+    # These simplify the control logic while still benefiting from PD smoothing
+    zones = {
+        'left': {'range': (-1.0, -PD_CENTER_THRESHOLD), 'relay': 'right', 'action': 'MOVE RIGHT'},
+        'center': {'range': (-PD_CENTER_THRESHOLD, PD_CENTER_THRESHOLD), 'relay': None, 'action': 'CENTER'},
+        'right': {'range': (PD_CENTER_THRESHOLD, 1.0), 'relay': 'left', 'action': 'MOVE LEFT'}
+    }
+    
+    # Determine which zone the target is in
+    current_zone = None
+    for zone, config in zones.items():
+        low, high = config['range']
+        if low <= current_error <= high:
+            current_zone = zone
+            break
+    
+    if current_zone is None:
+        # Fallback - should never happen
+        current_zone = 'center'
+    
+    if VERBOSE_OUTPUT:
+        print(f"Target in {current_zone} zone (error: {current_error:.3f}, derivative: {error_derivative:.3f})")
+    
+    # Check if we need to move
+    if current_zone != 'center' and (current_time - last_movement_time >= PD_MOVEMENT_COOLDOWN):
+        # Get relay info
+        relay_name = zones[current_zone]['relay']
+        action_desc = zones[current_zone]['action']
+        
+        if relay_name:
+            # Calculate pulse duration using PD
+            # Base it mainly on proportional component but dampen with derivative
+            base_duration = PD_KP * abs(current_error)
+            
+            # The derivative component reduces pulse duration when error is decreasing
+            # and increases it when error is increasing (same direction as error)
+            derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1)
+            
+            # Calculate final pulse duration
+            pulse_duration = base_duration + derivative_adjustment
+            
+            # Clamp to min/max values
+            pulse_duration = max(PD_MIN_PULSE, min(pulse_duration, PD_MAX_PULSE))
+            
+            # Activate the relay
+            print(f"PD {action_desc} (Error: {current_error:.3f}, Derivative: {error_derivative:.3f}, Duration: {pulse_duration:.3f}s)")
+            activate_relay(RELAY_PINS[relay_name], pulse_duration)
+            last_movement_time = current_time
+            
+    return current_error  # Return for visualization
+
+
+def draw_frame_elements(frame, fps, detections, current_pd_error=None):
+    """Draws FPS, detections, status text, and PD visualization onto the frame."""
+    height, width = frame.shape[:2]
+    display_frame = frame.copy() # Work on a copy
+
+    # --- FPS Display ---
+    fps_text = f"FPS: {fps:.1f}"
+    cv2.putText(display_frame, fps_text, (width - 100, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_GREEN, 2)
+
+    # --- Active Relay Status ---
+    if time.time() - last_action_time < 2.0:
+        relay_status = f"Relay: {last_action}"
+        cv2.putText(display_frame, relay_status, (width - 240, 60),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_YELLOW, 2)
+
+    # --- PD Control Parameters Display ---
+    pd_settings = f"KP: {PD_KP:.2f} KD: {PD_KD:.2f} TH: {PD_CENTER_THRESHOLD:.2f}"
+    cv2.putText(display_frame, pd_settings, (10, height - 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1)
+
+    # --- Detections Display ---
+    target_drawn = False
+    for det in detections:
+        x1, y1, x2, y2 = det['bbox']
+        score = det['score']
+        class_id = det['category_id']
+        label = det['label']
+
+        # Use different color for the primary target (first in sorted list)
+        color = COLORS[0] if not target_drawn else COLORS[class_id % len(COLORS)]
+        thickness = 3 if not target_drawn else 2
+
+        # Draw bounding box
+        cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, thickness)
+
+        # Draw label text with background
+        text = f"{label}: {score:.2f}"
+        (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        cv2.rectangle(display_frame, (x1, y1 - text_h - 5), (x1 + text_w, y1), color, -1)
+        cv2.putText(display_frame, text, (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 2)
+
+        target_drawn = True # Mark that the primary target bbox is drawn
+
+    # --- Status Text ---
+    status_text = f"Last Action: {last_action}"
+    # Display for 2 seconds after action
+    if time.time() - last_action_time > 2.0:
+         status_text = "Last Action: ---"
+
+    cv2.putText(display_frame, status_text, (10, height - 10),
+                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_YELLOW, 2)
+
+    # --- PD Control Visualization ---
+    # Center line
+    center_x_frame = width // 2
+    cv2.line(display_frame, (center_x_frame, 0), (center_x_frame, height), COLOR_YELLOW, 1)
+
+    if current_pd_error is not None:
+         # Draw target position marker based on error
+         marker_pos_x = int(center_x_frame + (width / 2) * current_pd_error)
+         cv2.circle(display_frame, (marker_pos_x, height - 40), 8, COLOR_RED, -1)
+         cv2.line(display_frame, (marker_pos_x, height-40), (marker_pos_x, height-20), COLOR_RED, 2)
+
+         # Draw dead zone boundaries
+         left_deadzone = int(center_x_frame - (width / 2) * PD_CENTER_THRESHOLD)
+         right_deadzone = int(center_x_frame + (width / 2) * PD_CENTER_THRESHOLD)
+         cv2.line(display_frame, (left_deadzone, height - 25), (left_deadzone, height - 15), COLOR_GREEN, 2)
+         cv2.line(display_frame, (right_deadzone, height - 25), (right_deadzone, height - 15), COLOR_GREEN, 2)
+
+         # Display error value
+         error_text = f"PD Error: {current_pd_error:.3f}"
+         cv2.putText(display_frame, error_text, (10, 30),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_WHITE, 2)
+    else:
+         # Indicate no target detected for PD
+         no_target_text = "No Target for PD"
+         cv2.putText(display_frame, no_target_text, (10, 30),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_RED, 2)
+
+    # --- Add timestamp ---
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cv2.putText(display_frame, timestamp, (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1)
+
+    return display_frame
+
+
+def cleanup():
+    """Clean up resources before exiting."""
+    print("\n--- Cleaning Up ---")
+    global video_writer, camera, running
+
+    # Signal input thread to exit
+    running = False
+    time.sleep(0.5)  # Short delay to allow thread to respond
+
+    # Release video writer
+    if video_writer is not None:
+        try:
+            video_writer.release()
+            print("Video writer released.")
+            video_writer = None
+        except Exception as e:
+            print(f"Error releasing video writer: {e}")
+
+    # Stop camera
+    if camera is not None:
+        try:
+            camera.stop()
+            print("Camera stopped.")
+            camera = None
+        except Exception as e:
+            print(f"Error stopping camera: {e}")
+
+    # Turn off all relays with their correct OFF states
+    try:
+        print("Turning off all relays...")
+        
+        # Ensure squirt relay is OFF (LOW)
+        GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
+        print(f"Set squirt relay (pin {RELAY_PINS['squirt']}) to OFF state (LOW)")
+        
+        # Ensure all other relays are OFF (HIGH for active-low)
+        for name, pin in RELAY_PINS.items():
+            if name != 'squirt':
+                off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+                GPIO.output(pin, off_state)
+                print(f"Set {name} relay (pin {pin}) to OFF state ({'HIGH' if off_state == GPIO.HIGH else 'LOW'})")
+                
+        time.sleep(0.2)  # Short pause to ensure state changes take effect
+        
+        # Now clean up GPIO resources
+        GPIO.cleanup()
+        print("GPIO cleaned up.")
+    except Exception as e:
+        print(f"Error during GPIO cleanup: {e}")
+
+    # Quit pygame mixer
+    if SOUND_ENABLED:
+        try:
+            pygame.mixer.quit()
+            print("Pygame mixer quit.")
+        except Exception as e:
+            print(f"Error quitting pygame mixer: {e}")
+
+    print("Cleanup complete.")
+
 
 def signal_handler(sig, frame):
-    """Handle Ctrl+C signal"""
-    print("\nProgram terminated by user")
-    if 'camera' in locals():
-        cleanup_camera(camera)
-    if DEV_MODE:
-        pygame.mixer.quit()
-    sys.exit(0)
+    """Handle Ctrl+C gracefully."""
+    global running
+    print("\nCtrl+C detected. Exiting gracefully...")
+    running = False
+    # Cleanup will be called in the finally block of main
 
-# Register signal handler
-signal.signal(signal.SIGINT, signal_handler)
 
-def save_frame(frame, filename="latest_frame.jpg"):
-    """Save a frame to disk for debugging"""
-    try:
-        # Make sure the image is BGR for OpenCV
-        if isinstance(frame, np.ndarray):
-            # Create a copy to avoid modifying the original
-            save_img = frame.copy()
-            
-            # Check if the image has the right format
-            if save_img.ndim != 3 or save_img.shape[2] != 3:
-                print(f"Warning: Unexpected image format: shape={save_img.shape}")
-                if save_img.ndim == 2:  # Convert grayscale to BGR
-                    save_img = cv2.cvtColor(save_img, cv2.COLOR_GRAY2BGR)
-            
-            # Verify that image contains valid data
-            if np.isnan(save_img).any() or np.isinf(save_img).any():
-                print("Warning: Image contains NaN or Inf values, fixing...")
-                save_img = np.nan_to_num(save_img)
-            
-            # Ensure image values are in valid range for uint8
-            if save_img.dtype != np.uint8:
-                if save_img.max() <= 1.0:
-                    # Convert from [0,1] float to [0,255] uint8
-                    save_img = (save_img * 255).astype(np.uint8)
-                else:
-                    # Otherwise just convert to uint8
-                    save_img = save_img.astype(np.uint8)
-            
-            # Save the image
-            success = cv2.imwrite(filename, save_img)
-            if success:
-                print(f"Saved frame to {filename}")
-                return True
-            else:
-                print(f"Failed to save image to {filename}")
-                return False
-        else:
-            print(f"Error: frame is not a valid image: {type(frame)}")
-            return False
-    except Exception as e:
-        print(f"Error saving frame: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def draw_detection_on_frame(frame, detection):
-    """Draw a single detection on the frame with proper formatting"""
-    try:
-        # Ensure we have a writable copy
-        draw_frame = frame.copy()
-        
-        x1, y1, x2, y2, score, class_id = detection
-        
-        # Get class name
-        if USE_COCO_MODEL:
-            class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
-        else:
-            class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-        
-        # Get color based on class ID
-        color = COLORS[class_id % len(COLORS)]
-        
-        # Ensure coordinates are valid integers
-        height, width = draw_frame.shape[:2]
-        x1 = max(0, min(int(x1), width-1))
-        y1 = max(0, min(int(y1), height-1))
-        x2 = max(0, min(int(x2), width-1))
-        y2 = max(0, min(int(y2), height-1))
-        
-        # Draw with extra thick bounding box to be easily visible
-        thickness = 3
-        cv2.rectangle(draw_frame, (x1, y1), (x2, y2), color, thickness)
-        
-        # Add filled background for text
-        label_text = f"{class_name}: {score:.2f}"
-        font_scale = 0.8  # Increased font size
-        text_size, _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
-        text_w, text_h = text_size
-        
-        # Draw filled rectangle for text background - make it more visible
-        bg_color = color  # Use same color as box for background
-        cv2.rectangle(draw_frame, 
-                     (x1, y1 - text_h - 10), 
-                     (x1 + text_w + 10, y1), 
-                     bg_color, -1)  # -1 means filled
-        
-        # Draw text with contrasting color (white works well on most colors)
-        cv2.putText(draw_frame, label_text, 
-                   (x1 + 5, y1 - 5), 
-                   cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 2)
-        
-        # Also draw a bright crosshair at center of object for visibility
-        center_x = (x1 + x2) // 2
-        center_y = (y1 + y2) // 2
-        crosshair_size = 10
-        
-        # Draw crosshair lines
-        cv2.line(draw_frame, (center_x - crosshair_size, center_y), (center_x + crosshair_size, center_y), (0, 255, 255), 2)
-        cv2.line(draw_frame, (center_x, center_y - crosshair_size), (center_x, center_y + crosshair_size), (0, 255, 255), 2)
-        
-        return draw_frame
-    except Exception as e:
-        print(f"Error drawing detection: {e}")
-        import traceback
-        traceback.print_exc()
-        return frame  # Return original frame if drawing fails
-
-def test_detection_on_sample_image():
-    """
-    Test the detection on a sample image to verify model is working.
-    This is useful for debugging whether the issue is with the model or the camera.
-    """
-    try:
-        # Load a sample image if available
-        sample_image_path = "sample_cat.jpg"
-        if os.path.exists(sample_image_path):
-            print(f"Testing detection on sample image: {sample_image_path}")
-            sample_image = cv2.imread(sample_image_path)
-            
-            # Resize to match model input size
-            sample_image = cv2.resize(sample_image, MODEL_INPUT_SIZE)
-            
-            # Run inference on the sample image
-            import degirum as dg
-            model = load_model()  # Load the model
-            
-            if model:
-                try:
-                    # Run inference
-                    results = model.predict(sample_image)
-                    
-                    # Save the output
-                    if hasattr(results, 'image_overlay') and results.image_overlay is not None:
-                        cv2.imwrite("sample_detection.jpg", results.image_overlay)
-                        print("Saved sample detection to sample_detection.jpg")
-                    
-                    # Print detection results
-                    if hasattr(results, 'results'):
-                        print(f"Sample image results: {len(results.results)} detections")
-                    
-                    return True
-                except Exception as e:
-                    print(f"Error running inference on sample: {e}")
-            
-            return False
-    except Exception as e:
-        print(f"Error in test detection: {e}")
-        return False
-    
-    return False  # No sample image found
-
-def test_degirum_setup():
-    """Test if DeGirum and Hailo are correctly set up"""
-    try:
-        import degirum as dg
-        print("DeGirum package is installed.")
-        
-        # Try to get DeGirum version
-        if hasattr(dg, '__version__'):
-            print(f"DeGirum version: {dg.__version__}")
-        
-        # Create a logs directory to help with permissions issues
-        os.makedirs("logs", exist_ok=True)
-        os.chmod("logs", 0o777)  # Ensure write permissions
-        print("Created logs directory for HailoRT logs")
-            
-        # Test if Hailo runtime is available
-        try:
-            # Alternative way to check for Hailo
-            import subprocess
-            try:
-                # Redirect logs to our directory with permissions
-                env = os.environ.copy()
-                env["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), "logs")
-                
-                result = subprocess.run(['hailortcli', 'device', 'show'], 
-                                      capture_output=True, text=True, timeout=5,
-                                      env=env)
-                print("Hailo device information:")
-                print(result.stdout)
-                if result.returncode != 0:
-                    print(f"Warning: hailortcli returned non-zero exit code: {result.returncode}")
-                    print(f"Error output: {result.stderr}")
-            except Exception as e:
-                print(f"Could not run hailortcli: {e}")
-            
-            return True
-        except Exception as e:
-            print(f"Error checking Hailo runtime: {e}")
-            return False
-            
-    except ImportError:
-        print("ERROR: DeGirum package is not installed or cannot be imported.")
-        print("Please install DeGirum package using:")
-        print("pip install degirum")
-        return False
-    except Exception as e:
-        print(f"Error testing DeGirum setup: {e}")
-        return False
+# --- Utility Classes / Functions ---
 
 class FPSCounter:
-    """Class to calculate FPS"""
+    """Simple class to calculate Frames Per Second."""
     def __init__(self):
-        self.start_time = time.time()
-        self.frame_count = 0
-        self.fps = 0
-        
-    def get_fps(self):
-        """Calculate FPS based on frame count and elapsed time"""
-        self.frame_count += 1
-        elapsed_time = time.time() - self.start_time
-        
-        # Update FPS calculation every second
-        if elapsed_time >= 1.0:
-            self.fps = self.frame_count / elapsed_time
-            self.frame_count = 0
-            self.start_time = time.time()
-            
-        return self.fps
+        self._start = time.monotonic()
+        self._count = 0
+        self._fps = 0.0
 
-def cleanup_old_frames():
-    """Clean up old saved frames to prevent filling the disk"""
-    try:
-        # Get all jpg files in the current directory
-        jpg_files = [f for f in os.listdir('.') if f.startswith('detection_') and f.endswith('.jpg')]
-        
-        # Sort by modification time (newest first)
-        jpg_files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
-        
-        # If we have more than MAX_SAVED_FRAMES, remove the oldest ones
-        if len(jpg_files) > MAX_SAVED_FRAMES:
-            files_to_remove = jpg_files[MAX_SAVED_FRAMES:]
-            for old_file in files_to_remove:
-                try:
-                    os.remove(old_file)
-                    if DEBUG_MODE:
-                        print(f"Removed old frame: {old_file}")
-                except Exception as e:
-                    print(f"Error removing old frame {old_file}: {e}")
-                    
-        # Also clean up old FPS report images
-        fps_files = [f for f in os.listdir('.') if f.startswith('fps_report_') and f.endswith('.jpg')]
-        fps_files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
-        
-        # Keep only the 5 most recent FPS reports
-        if len(fps_files) > 5:
-            for old_file in fps_files[5:]:
-                try:
-                    os.remove(old_file)
-                except Exception:
-                    pass
-    except Exception as e:
-        if DEBUG_MODE:
-            print(f"Error cleaning up old frames: {e}")
+    def update(self):
+        self._count += 1
+
+    def get_fps(self):
+        now = time.monotonic()
+        elapsed = now - self._start
+        if elapsed >= 1.0:
+            self._fps = self._count / elapsed
+            self._start = now
+            self._count = 0
+        return self._fps
 
 def init_video_writer():
-    """Initialize video writer for recording"""
-    if not RECORD_VIDEO:
-        return None
-        
+    """Initialize video writer for recording."""
+    if not RECORD_VIDEO and time.time() - program_start_time > VIDEO_START_RECORD_DURATION:
+         # Don't start if video recording is disabled AND initial period has passed
+         return None
+
     try:
-        # Create output directory if it doesn't exist
-        if not os.path.exists(VIDEO_OUTPUT_DIR):
-            os.makedirs(VIDEO_OUTPUT_DIR)
-            print(f"Created video output directory: {VIDEO_OUTPUT_DIR}")
-        
-        # Generate filename with timestamp
+        os.makedirs(VIDEO_OUTPUT_DIR, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        video_filename = os.path.join(VIDEO_OUTPUT_DIR, f"cat_detector_{timestamp}.mp4")
-        
-        # Create video writer
-        video_writer = cv2.VideoWriter(
-            video_filename, 
-            VIDEO_CODEC, 
-            VIDEO_FPS, 
-            VIDEO_RESOLUTION
+        video_filename = os.path.join(VIDEO_OUTPUT_DIR, f"detection_{timestamp}.mp4")
+
+        writer = cv2.VideoWriter(
+            video_filename, VIDEO_CODEC, VIDEO_FPS, VIDEO_RESOLUTION
         )
-        
-        if not video_writer.isOpened():
-            print(f"Error: Could not open video writer. Check codec and path: {video_filename}")
+
+        if not writer.isOpened():
+            print(f"ERROR: Could not open video writer for {video_filename}. Check codec and permissions.")
             return None
-            
-        print(f"Video recording initialized: {video_filename}")
-        return video_writer
+
+        print(f"Video recording started: {video_filename}")
+        return writer
     except Exception as e:
         print(f"Error initializing video writer: {e}")
         return None
 
-def cleanup_video_writer(video_writer):
-    """Clean up video writer"""
-    if video_writer is not None:
-        try:
-            video_writer.release()
-            print("Video writer released")
-        except Exception as e:
-            print(f"Error releasing video writer: {e}")
+def save_debug_frame(frame, base_filename="detection"):
+     """Saves a frame for debugging, managing old files."""
+     global frame_num_global # Use a global counter to ensure unique names over time
 
-def create_new_video_writer(video_writer):
-    """Create a new video writer when the current video reaches max length"""
-    # First close the current writer
-    if video_writer is not None:
-        cleanup_video_writer(video_writer)
-    
-    # Then create a new one
-    return init_video_writer()
+     # --- Cleanup old frames ---
+     try:
+         debug_files = sorted([f for f in os.listdir('.') if f.startswith(base_filename + '_') and f.endswith('.jpg')])
+         while len(debug_files) >= MAX_SAVED_FRAMES:
+             file_to_remove = debug_files.pop(0)
+             os.remove(file_to_remove)
+             if VERBOSE_OUTPUT: print(f"Removed old debug frame: {file_to_remove}")
+     except Exception as e:
+         print(f"Warning: Error cleaning up debug frames: {e}")
 
-def draw_relay_status(frame, active_relays, current_position=0, max_position=5):
-    """Draw relay status indicators on the frame"""
-    height, width = frame.shape[:2]
-    
-    # Draw relay status in top-right corner
-    cv2.rectangle(frame, (width - 180, 80), (width, 200), (0, 0, 0), -1)
-    
-    y_offset = 100
-    
-    # Draw center/squirt relay status
-    center_status = "SQUIRT: ON" if active_relays.get('squirt', False) else "SQUIRT: OFF"
-    color = (0, 255, 0) if active_relays.get('squirt', False) else (0, 0, 255)
-    cv2.putText(frame, center_status, (width - 170, y_offset), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    
-    # Draw left relay status
-    y_offset += 30
-    left_status = "LEFT: ON" if active_relays.get('left', False) else "LEFT: OFF"
-    color = (0, 255, 0) if active_relays.get('left', False) else (0, 0, 255)
-    cv2.putText(frame, left_status, (width - 170, y_offset), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    
-    # Draw right relay status
-    y_offset += 30
-    right_status = "RIGHT: ON" if active_relays.get('right', False) else "RIGHT: OFF"
-    color = (0, 255, 0) if active_relays.get('right', False) else (0, 0, 255)
-    cv2.putText(frame, right_status, (width - 170, y_offset), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    
-    # Draw position tracker at bottom of frame
-    position_bar_width = 300
-    position_bar_height = 30
-    position_bar_x = (width - position_bar_width) // 2
-    position_bar_y = height - 50
-    
-    # Draw background bar
-    cv2.rectangle(frame, 
-                 (position_bar_x, position_bar_y), 
-                 (position_bar_x + position_bar_width, position_bar_y + position_bar_height), 
-                 (50, 50, 50), -1)
-    
-    # Calculate position marker location
-    segments = 2 * max_position + 1
-    segment_width = position_bar_width / segments
-    position_x = int(position_bar_x + (current_position + max_position) * segment_width)
-    
-    # Draw center line
-    center_x = position_bar_x + position_bar_width // 2
-    cv2.line(frame, 
-            (center_x, position_bar_y), 
-            (center_x, position_bar_y + position_bar_height), 
-            (200, 200, 200), 2)
-    
-    # Draw position marker
-    marker_radius = 10
-    marker_color = (0, 255, 255)  # Yellow
-    cv2.circle(frame, 
-              (position_x, position_bar_y + position_bar_height // 2), 
-              marker_radius, marker_color, -1)
-    
-    # Draw position scale
-    for i in range(-max_position, max_position + 1):
-        tick_x = int(position_bar_x + (i + max_position) * segment_width)
-        cv2.line(frame, 
-                (tick_x, position_bar_y + position_bar_height), 
-                (tick_x, position_bar_y + position_bar_height - 10), 
-                (200, 200, 200), 1)
-        if i % 2 == 0:  # Only show every other number to avoid crowding
-            cv2.putText(frame, str(i), 
-                      (tick_x - 5, position_bar_y + position_bar_height + 20), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-    
-    return frame
+     # --- Save new frame ---
+     try:
+         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+         filename = f"{base_filename}_{timestamp}_{frame_num_global}.jpg"
+         cv2.imwrite(filename, frame)
+         if VERBOSE_OUTPUT: print(f"Saved debug frame: {filename}")
+     except Exception as e:
+         print(f"Error saving debug frame: {e}")
 
-def process_actions(frame, detections, fps):
-    """Process detected objects and take appropriate actions"""
-    global last_valid_overlay, last_action, last_action_time, last_detection_time
-    
-    # Draw the original image
-    display_frame = frame.copy()
-    current_time = time.time()
-    
-    # Initialize relative position to None
-    relative_position = None
-    
-    # Flag to indicate if we processed any detections
-    detection_processed = False
-    
-    # Process each detection
-    for detection in detections:
-        try:
-            # Extract detection information - handle both tuple and dictionary formats
-            if isinstance(detection, tuple) and len(detection) >= 6:
-                # Tuple format: (x1, y1, x2, y2, score, class_id)
-                x1, y1, x2, y2, confidence, class_id = detection
-                label = ""
-            elif isinstance(detection, dict):
-                # Dictionary format
-                x1, y1, x2, y2 = detection['bbox']
-                confidence = detection['score']
-                class_id = detection['category_id']
-                label = detection.get('label', '')
-            else:
-                print(f"Unknown detection format: {type(detection)}")
-                continue
-            
-            # Convert to integers and ensure within frame bounds
-            height, width = frame.shape[:2]
-            x1 = max(0, min(width-1, int(x1)))
-            y1 = max(0, min(height-1, int(y1)))
-            x2 = max(0, min(width-1, int(x2)))
-            y2 = max(0, min(height-1, int(y2)))
-            
-            # Ensure the detection is for one of our target classes (cat/dog)
-            if class_id in CLASSES_TO_DETECT:
-                # Mark that we processed a detection
-                detection_processed = True
-                
-                # Handle the detection
-                relative_position = handle_detection((x1, y1, x2, y2), width)
-                
-                # Draw the bounding box and label
-                if class_id in COCO_CLASSES:
-                    label = COCO_CLASSES[class_id]
-                color = COLORS[class_id % len(COLORS)]
-                cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-                text = f"{label}: {confidence:.2f}"
-                cv2.putText(display_frame, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                
-                # Update last detection time
-                last_detection_time = current_time
-                
-                # Draw the position marker
-                draw_overlay(display_frame, relative_position)
-                
-                # Store for future reference
-                last_valid_overlay = display_frame.copy()
-                
-                # Only process the highest confidence detection (sorting is done earlier)
-                break
-                
-        except Exception as e:
-            print(f"Error processing detection: {e}")
-    
-    # If no detections were processed
-    if not detection_processed:
-        # Check if we need to reset position
-        reset_occurred = check_position_reset()
-        
-        # If we have a previous overlay, use it
-        if last_valid_overlay is not None:
-            # Fade the overlay to show it's from a previous frame
-            alpha = 0.7  # Higher values are more opaque
-            if relative_position is None:
-                # If no detection in this frame, draw the overlay without a detection
-                draw_overlay(display_frame)
-                
-            # Ensure the dimensions match before using addWeighted
-            if display_frame.shape == last_valid_overlay.shape:
-                display_frame = cv2.addWeighted(display_frame, 1.0, last_valid_overlay, alpha, 0)
-            else:
-                # Resize last_valid_overlay to match display_frame
-                last_valid_overlay_resized = cv2.resize(last_valid_overlay, (display_frame.shape[1], display_frame.shape[0]))
-                display_frame = cv2.addWeighted(display_frame, 1.0, last_valid_overlay_resized, alpha, 0)
-                
-            cv2.putText(display_frame, "No current detection", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['red'], 2)
-    
-    # Draw FPS
-    cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_NAMES['green'], 2)
-    
-    return display_frame
 
-def test_model_on_sample(model):
-    """Test the model on a sample image"""
-    try:
-        # Load sample image
-        sample_path = "sample_cat.jpg"
-        if not os.path.exists(sample_path):
-            print(f"Sample image not found: {sample_path}")
-            return
-            
-        print(f"Loading sample image: {sample_path}")
-        sample_img = cv2.imread(sample_path)
-        
-        if sample_img is None:
-            print("Failed to load sample image")
-            return
-            
-        # Perform inference on sample image
-        print("Running inference on sample image...")
-        
-        # Run inference
-        if DEV_MODE:
-            results = model(sample_img, conf=DETECTION_THRESHOLD)
-        else:
-            results_generator = model.predict_batch([sample_img])
-            results = next(results_generator)
-        
-        print(f"Sample image inference result type: {type(results)}")
-        
-        # Process detections
-        detections = process_detections(sample_img, results)
-        
-        # Create visualization
-        annotated_img = sample_img.copy()
-        
-        # Draw detections
-        if len(detections) > 0:
-            print(f"Found {len(detections)} objects in sample image:")
-            
-            for detection in detections:
-                x1, y1, x2, y2, score, class_id = detection
-                
-                # Get class name
-                if USE_COCO_MODEL:
-                    class_name = COCO_CLASSES.get(class_id, f"Unknown class {class_id}")
-                else:
-                    class_name = CAT_CLASSES.get(class_id, f"Unknown class {class_id}")
-                
-                print(f"- {class_name}: confidence={score:.2f}, box=({x1},{y1},{x2},{y2})")
-                
-                # Draw bounding box
-                color = COLORS[class_id % len(COLORS)]
-                cv2.rectangle(annotated_img, (x1, y1), (x2, y2), color, 2)
-                
-                # Add label with confidence
-                label = f"{class_name}: {score:.2f}"
-                cv2.rectangle(annotated_img, (x1, y1-30), (x1+len(label)*15, y1), color, -1)
-                cv2.putText(annotated_img, label, (x1, y1-5), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-                
-            # Save the annotated sample image
-            cv2.imwrite("sample_detection.jpg", annotated_img)
-            print("Saved sample detection results to sample_detection.jpg")
-        else:
-            print("No objects detected in sample image")
-            
-            # If we have an image overlay, save it
-            if hasattr(results, 'image_overlay') and results.image_overlay is not None:
-                print("Saving model overlay for sample image")
-                cv2.imwrite("sample_overlay.jpg", results.image_overlay)
-                
-                # Also save the original for comparison
-                cv2.imwrite("sample_original.jpg", sample_img)
-                
-                # Create side-by-side comparison
-                if results.image_overlay.shape == sample_img.shape:
-                    comparison = np.hstack((sample_img, results.image_overlay))
-                    cv2.imwrite("sample_comparison.jpg", comparison)
-    
-    except Exception as e:
-        print(f"Error testing model on sample image: {e}")
-        import traceback
-        traceback.print_exc()
-
-def read_frame(camera):
-    """Read a frame from the camera"""
-    try:
-        if DEV_MODE:
-            # OpenCV camera in dev mode
-            ret, frame = camera.read()
-            
-            if not ret:
-                print("Failed to capture frame")
-                return None
-                
-            return frame
-        else:
-            # Picamera2 in production mode
-            try:
-                # Get frame directly from Picamera2
-                frame = camera.capture_array()
-                
-                # Handle different color formats
-                if frame.shape[2] == 4:  # If it has 4 channels (XBGR)
-                    # Convert XBGR to BGR by dropping the X channel
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-                else:
-                    # Convert RGB to BGR for OpenCV if needed
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                
-                # Resize if needed
-                if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
-                    frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
-                
-                return frame
-            except Exception as e:
-                print(f"Error capturing frame from Pi camera: {e}")
-                return None
-    except Exception as e:
-        print(f"Error reading frame: {e}")
-        return None
-
-def init_gpio():
-    """Initialize GPIO pins for relay control"""
-    if not DEV_MODE:
-        try:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            
-            # Initialize all pins as outputs
-            for pin in RELAY_PINS.values():
-                GPIO.setup(pin, GPIO.OUT)
-            
-            # Initialize the squirt relay to OFF state (LOW)
-            print(f"Setting SQUIRT relay (pin {RELAY_PINS['squirt']}) to OFF state...")
-            GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
-            
-            # Initialize other relays to OFF state (HIGH for active-low relays)
-            for name, pin in RELAY_PINS.items():
-                if name != 'squirt' and name != 'unused':
-                    print(f"Setting {name} relay (pin {pin}) to OFF state...")
-                    GPIO.output(pin, GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)
-            
-            print(f"GPIO initialized with relay pins: squirt={RELAY_PINS['squirt']}, left={RELAY_PINS['left']}, right={RELAY_PINS['right']}")
-            print(f"Relays are {'ACTIVE LOW' if RELAY_ACTIVE_LOW else 'ACTIVE HIGH'} and {'NORMALLY CLOSED' if RELAY_NORMALLY_CLOSED else 'NORMALLY OPEN'}")
-        except ImportError:
-            print("WARNING: RPi.GPIO module not available, GPIO control disabled")
-        except Exception as e:
-            print(f"Error initializing GPIO: {e}")
-
-def set_relay(pin, state):
-    """
-    Set relay state (True = ON, False = OFF) with state caching and hysteresis
-    
-    Special handling for squirt relay which has opposite behavior from other relays:
-    - Squirt relay: HIGH = ON, LOW = OFF
-    - Other relays: LOW = ON, HIGH = OFF (active-low)
-    """
-    global relay_state_cache, last_relay_change_time
-    
-    # Get current time for hysteresis check
-    current_time = time.time()
-    
-    # Skip if the state hasn't changed
-    if pin in relay_state_cache and relay_state_cache[pin] == state:
-        return False
-    
-    # Apply hysteresis to prevent rapid toggling
-    if pin in last_relay_change_time:
-        time_since_last_change = current_time - last_relay_change_time[pin]
-        if time_since_last_change < RELAY_HYSTERESIS_TIME:
-            if DEBUG_MODE:
-                print(f"Skipping relay {pin} change due to hysteresis ({time_since_last_change:.2f}s < {RELAY_HYSTERESIS_TIME}s)")
-            return False
-    
-    try:
-        import RPi.GPIO as GPIO
-        
-        # Special handling for squirt relay which has opposite behavior
-        if pin == RELAY_PINS['squirt']:
-            # Squirt relay: HIGH = ON, LOW = OFF
-            gpio_state = SQUIRT_RELAY_ON_STATE if state else SQUIRT_RELAY_OFF_STATE
-            if DEBUG_MODE:
-                print(f"SQUIRT relay {pin} set to {'ON' if state else 'OFF'} (GPIO {'HIGH' if gpio_state == GPIO.HIGH else 'LOW'})")
-        else:
-            # Standard relays: active-low behavior (LOW = ON, HIGH = OFF)
-            gpio_state = GPIO.LOW if state else GPIO.HIGH
-            if DEBUG_MODE:
-                print(f"Standard relay {pin} set to {'ON' if state else 'OFF'} (GPIO {'LOW' if gpio_state == GPIO.LOW else 'HIGH'})")
-        
-        # Set the GPIO pin state
-        GPIO.output(pin, gpio_state)
-        
-        # Update state cache and timestamp
-        relay_state_cache[pin] = state
-        last_relay_change_time[pin] = current_time
-        
-        return True
-    except (ImportError, NameError):
-        # If we can't import GPIO, just print what we would do
-        if DEBUG_MODE:
-            print(f"Would set relay {pin} to {'ON' if state else 'OFF'}")
-        
-        # Still update the cache for consistent behavior
-        relay_state_cache[pin] = state
-        last_relay_change_time[pin] = current_time
-        return True
-    except Exception as e:
-        print(f"Error setting relay {pin}: {e}")
-        return False
-
-def cleanup():
-    """Clean up resources before exiting"""
-    print("Cleaning up resources...")
-    
-    # Ensure all relays are turned OFF before cleanup
-    try:
-        if not DEV_MODE:
-            print("Turning off all relays...")
-            # Use specific handling for the squirt relay to ensure it's OFF
-            print(f"Setting squirt relay (pin {RELAY_PINS['squirt']}) to OFF state...")
-            GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
-            
-            # Turn off all other relays
-            for name, pin in RELAY_PINS.items():
-                if name != 'squirt' and name != 'unused':
-                    print(f"Setting {name} relay (pin {pin}) to OFF state...")
-                    GPIO.output(pin, GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)  # Set to OFF state
-            
-            time.sleep(0.5)  # Give time for states to take effect
-            
-            # Now clean up GPIO
-            GPIO.cleanup()
-            print("GPIO pins cleaned up")
-    except Exception as e:
-        print(f"Error during GPIO cleanup: {e}")
-    
-    # Release camera if it exists
-    try:
-        if 'camera' in globals() and camera is not None:
-            if DEV_MODE:
-                camera.release()
-            else:
-                camera.stop()
-            print("Camera released")
-    except Exception as e:
-        print(f"Error releasing camera: {e}")
-        
-    print("Cleanup completed")
-
-def print_config():
-    """Print current configuration settings"""
-    print("\n=== Configuration ===")
-    print(f"Model type: {'COCO YOLOv8n' if USE_COCO_MODEL else 'Custom cat model'}")
-    if USE_COCO_MODEL:
-        print(f"Classes to detect: {[COCO_CLASSES[i] for i in CLASSES_TO_DETECT]}")
-    else:
-        print(f"Classes to detect: {list(CAT_CLASSES.values())}")
-    print(f"Detection threshold: {DETECTION_THRESHOLD}")
-    print(f"Display resolution: {FRAME_WIDTH}x{FRAME_HEIGHT}")
-    print(f"Target FPS: {FPS}")
-    print(f"Debug mode: {'Enabled' if DEBUG_MODE else 'Disabled'}")
-    print(f"Development mode: {'Enabled' if DEV_MODE else 'Disabled'}")
-    print("=== End Configuration ===\n")
-    
-def print_header():
-    """Print program header information"""
-    print("\n===============================================")
-    print("=  Cat Detection System with Hailo AI Kit    =")
-    print("===============================================")
-    print(f"OpenCV version: {cv2.__version__}")
-    
-    # Check if running in headless mode
-    if 'DISPLAY' not in os.environ:
-        print("Running in headless mode - terminal output only")
-    else:
-        print("Running with display support")
-        
-    # Print platform-specific information
-    if sys.platform.startswith('linux'):
-        try:
-            # Try to import Pi-specific libraries to detect platform
-            import RPi.GPIO
-            print("Successfully imported Pi-specific modules")
-        except ImportError:
-            print("Not running on Raspberry Pi (RPi.GPIO not available)")
-    else:
-        print(f"Running on platform: {sys.platform}")
-    print("")
+# --- Test Functions ---
 
 def test_relays():
-    """Test all relays to ensure they're working properly"""
-    if DEV_MODE:
-        print("Skipping relay test in development mode")
+    """Briefly activate each relay sequentially."""
+    print("\n--- Testing Relays ---")
+    setup_gpio() # Ensure GPIO is set up
+
+    # Test squirt relay
+    print("Testing SQUIRT relay...")
+    activate_relay(RELAY_PINS['squirt'], 0.3)
+    time.sleep(0.5)
+
+    # Test left movement relay (should turn platform RIGHT)
+    print("Testing LEFT relay (turn platform RIGHT)...")
+    activate_relay(RELAY_PINS['right'], 0.3) # Remember right relay turns left
+    time.sleep(0.5)
+
+    # Test right movement relay (should turn platform LEFT)
+    print("Testing RIGHT relay (turn platform LEFT)...")
+    activate_relay(RELAY_PINS['left'], 0.3) # Remember left relay turns right
+    time.sleep(0.5)
+
+    print("Relay test complete.\n")
+
+def test_model_on_sample(model_instance):
+    """Run inference on a sample image if available."""
+    sample_image_path = "sample_cat.jpg" # Or another relevant image
+    if not os.path.exists(sample_image_path):
+        print(f"Sample image '{sample_image_path}' not found, skipping test.")
         return
-        
+
+    print(f"\n--- Testing Model on Sample Image: {sample_image_path} ---")
     try:
-        print("\n==== RELAY TEST ====")
-        print("Testing all relays in sequence...")
-        
-        # First turn all relays OFF to establish baseline
-        print("Setting all relays to OFF state...")
-        # Special handling for squirt relay
-        GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
-        print(f"SQUIRT relay (pin {RELAY_PINS['squirt']}) set to {'LOW' if SQUIRT_RELAY_OFF_STATE == GPIO.LOW else 'HIGH'} (OFF)")
-        
-        # Handle other relays
-        for name, pin in RELAY_PINS.items():
-            if name != 'squirt' and name != 'unused':
-                GPIO.output(pin, GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)  # Set to OFF state
-                print(f"{name.upper()} relay (pin {pin}) set to {'HIGH' if RELAY_ACTIVE_LOW else 'LOW'} (OFF)")
-        
-        time.sleep(0.5)
-        
-        # Simplified relay test - briefly trigger each relay
-        for name, pin in RELAY_PINS.items():
-            if name == 'unused':
-                continue
-                
-            print(f"Testing {name.upper()} relay (pin {pin})...")
-            activate_relay(pin, 0.3)  # Brief activation for each relay
-        
-        print("\nRelay test completed")
-        print("====================\n")
+        img = cv2.imread(sample_image_path)
+        if img is None:
+            print("Error: Failed to load sample image.")
+            return
+
+        # Resize if necessary to match model input
+        if img.shape[0] != MODEL_INPUT_SIZE[1] or img.shape[1] != MODEL_INPUT_SIZE[0]:
+            img_resized = cv2.resize(img, MODEL_INPUT_SIZE)
+        else:
+            img_resized = img
+
+        print("Running inference on sample...")
+        # Use predict_batch as it's common for Degirum models
+        results_generator = model_instance.predict_batch([img_resized])
+        results = next(results_generator) # Get the result for the single image
+
+        print("Processing sample results...")
+        detections = process_detections(img_resized, results)
+
+        print(f"Found {len(detections)} objects in sample.")
+        annotated_frame = draw_frame_elements(img_resized, 0, detections) # Draw results
+
+        save_filename = "sample_detection_output.jpg"
+        cv2.imwrite(save_filename, annotated_frame)
+        print(f"Saved annotated sample output to: {save_filename}")
+        print("--- Sample Test Complete ---\n")
+
     except Exception as e:
-        print(f"Error testing relays: {e}")
-        import traceback
+        print(f"Error during sample image test: {e}")
         traceback.print_exc()
-        
-def check_position_reset():
-    """Check if position should be reset to center due to inactivity"""
-    global CURRENT_ZONE, last_detection_time
-    
-    # If no detection for POSITION_RESET_TIME, reset to center
-    if time.time() - last_detection_time > POSITION_RESET_TIME:
-        if CURRENT_ZONE != 'center':
-            if DEBUG_MODE:
-                print(f"No detection for {POSITION_RESET_TIME:.1f}s, resetting to center")
-            CURRENT_ZONE = 'center'
-            return True
-    
-    return False
+
+def test_degirum_setup():
+     """Basic check for DeGirum and Hailo."""
+     print("\n--- Checking DeGirum and Hailo Setup ---")
+     try:
+         import degirum
+         print(f"DeGirum version: {degirum.__version__}")
+     except ImportError:
+         print("ERROR: DeGirum package not found. Please install it.")
+         return False
+
+     try:
+         import subprocess
+         # Use hailortcli to check device status
+         log_dir = "logs" # Ensure logs directory exists
+         os.makedirs(log_dir, exist_ok=True)
+         env = os.environ.copy()
+         env["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), log_dir)
+
+         result = subprocess.run(['hailortcli', 'device', 'show'],
+                                 capture_output=True, text=True, timeout=10, env=env)
+         print("Hailo device info (hailortcli):")
+         print(result.stdout)
+         if result.returncode != 0:
+             print(f"Warning: hailortcli command failed with code {result.returncode}")
+             print(f"Stderr: {result.stderr}")
+             return False
+         print("Hailo device seems present.")
+         print("--- Setup Check Complete ---\n")
+         return True
+     except FileNotFoundError:
+         print("ERROR: 'hailortcli' command not found. Is Hailo software installed and in PATH?")
+         return False
+     except Exception as e:
+         print(f"Error checking Hailo runtime: {e}")
+         return False
+
+# --- Main Execution ---
 
 def main():
-    """Main function"""
-    try:
-        print_header()
-        
-        # Test DeGirum and Hailo setup first
-        if not DEV_MODE:
-            test_degirum_setup()
-        
-        # Load AI model with proper error handling
-        model = load_model()
-        
-        if model is None:
-            print("Primary model loading failed. Trying fallback model...")
-            model = load_fallback_model()
-            
-        if model is None:
-            print("ERROR: Failed to load any model. Check the error messages above for details.")
-            print("Check that the DeGirum package is installed correctly and Hailo accelerator is connected.")
-            print("Exiting program.")
-            sys.exit(1)
+    global video_writer, camera, model, previous_error, last_detection_time
+    global program_start_time, frame_num_global, running, run_sample_test # Access global variables
 
-        # Configure camera
-        camera = setup_camera()
-        
-        # Initialize video writer for initial recording period
-        start_record = True
-        video_writer = init_video_writer() if (RECORD_VIDEO or start_record) else None
-        video_start_time = time.time()
-        program_start_time = time.time()
-        
-        # Initialize GPIO if not in dev mode
-        if not DEV_MODE:
-            init_gpio()
-            # Run simplified relay test
-            test_relays()
-        
-        # Test model on a sample image if it exists
-        if os.path.exists("sample_cat.jpg") and not DEV_MODE:
+    program_start_time = time.time() # Record script start time
+
+    # Register signal handler for Ctrl+C
+    signal.signal(signal.SIGINT, signal_handler)
+
+    print("\n===============================================")
+    print("=   Cat/Dog Detection System with PD Control  =")
+    print("===============================================")
+    print("Press 'h' for help on keyboard controls")
+
+    # --- Initialization ---
+    if not test_degirum_setup(): sys.exit(1)
+    test_relays() # Test relays early
+    setup_sound() # Initialize sound if available
+
+    model = load_model(HAILO_MODEL_NAME, HAILO_ZOO_PATH)
+    if model is None:
+        model = load_fallback_model(HAILO_ZOO_PATH)
+    if model is None:
+        print("CRITICAL: Failed to load any model. Exiting.")
+        sys.exit(1)
+
+    test_model_on_sample(model) # Test the loaded model
+
+    camera = setup_camera()
+
+    # Initialize video writer (might start recording immediately based on settings)
+    video_writer = init_video_writer()
+    video_start_time = time.time() # Track current video file start time
+
+    # Start input thread for keyboard commands
+    input_thread = threading.Thread(target=input_thread_function)
+    input_thread.daemon = True  # Thread will exit when main program exits
+    input_thread.start()
+
+    print("\n--- Starting Main Loop ---")
+    fps_counter = FPSCounter()
+    last_fps_print_time = time.time()
+    frame_count = 0
+    current_target_error = None # Store the error of the primary target for display
+
+    while running:
+        loop_start = time.monotonic()
+        frame_num_global += 1 # Increment global frame counter
+
+        # Check if we should run the sample test
+        if run_sample_test:
             test_model_on_sample(model)
-        
-        # Print configuration
-        print_config()
-        
-        # Initialize variables for smoothing detections
-        last_valid_detections = []
-        no_detection_frames = 0
-        max_no_detection_frames = 3  # Keep using last detection for 3 frames
-        
-        # Track performance metrics
-        fps_counter = FPSCounter()
-        frame_count = 0
-        last_fps_print = time.time()
-        inference_count = 0
-        
-        # Main loop
-        while True:
-            loop_start_time = time.time()
-            
-            # Read frame from camera - always use the Pi camera for inference
-            frame = read_frame(camera)
-            
-            if frame is None:
-                time.sleep(0.01)
-                continue
-            
-            # We always increment frame count and calculate FPS
-            frame_count += 1
-            fps = fps_counter.get_fps()
-            
-            # Run inference on every FRAME_SKIP frames
-            should_run_inference = (frame_count % FRAME_SKIP == 0)
-            
-            # Run inference if needed
-            if should_run_inference:
-                inference_count += 1
-                inference_start_time = time.time()
-                
-                # Perform inference 
-                try:
-                    # Always use Degirum's predict_batch method for Pi camera
-                    results_generator = model.predict_batch([frame])
-                    results = next(results_generator)
-                    
-                    # Process detection results
-                    detections = process_detections(frame, results)
-                    
-                    # Apply detection smoothing
-                    if not detections:
-                        no_detection_frames += 1
-                        if no_detection_frames <= max_no_detection_frames and last_valid_detections:
-                            detections = last_valid_detections
-                        else:
-                            # Clear detections completely
-                            detections = []
-                    else:
-                        # We have valid detections, reset counter and save for future use
-                        no_detection_frames = 0
-                        last_valid_detections = detections.copy()
-                        
-                    inference_time = time.time() - inference_start_time
-                except Exception as e:
-                    print(f"Error during inference: {e}")
-                    detections = last_valid_detections if no_detection_frames <= max_no_detection_frames else []
-            else:
-                # Reuse last detections when skipping inference
-                detections = last_valid_detections if no_detection_frames <= max_no_detection_frames else []
-            
-            # Process actions and update display 
-            processed_frame = process_actions(frame, detections, fps)
-            
-            # Handle video recording
-            current_time = time.time()
-            elapsed_time = current_time - program_start_time
-            
-            # Record video if enabled, including first 60 seconds after start
-            should_record = RECORD_VIDEO or (elapsed_time < VIDEO_START_RECORD_DURATION)
-            
-            if should_record and video_writer is not None:
-                try:
-                    # Write the processed frame (with annotations) to video
-                    video_writer.write(processed_frame)
-                    
-                    # Check if we need to create a new video file (max length reached)
-                    video_duration = current_time - video_start_time
-                    if video_duration >= VIDEO_MAX_LENGTH:
-                        print(f"Video reached maximum length ({VIDEO_MAX_LENGTH}s), creating new file")
-                        video_writer = create_new_video_writer(video_writer)
-                        video_start_time = current_time
-                        
-                    # After 60 seconds, check if we should stop recording (if not RECORD_VIDEO)
-                    if elapsed_time >= VIDEO_START_RECORD_DURATION and not RECORD_VIDEO and video_writer is not None:
-                        print(f"Finished 60-second initial recording")
-                        cleanup_video_writer(video_writer)
-                        video_writer = None
-                        
-                except Exception as e:
-                    print(f"Error writing video frame: {e}")
-            
-            # Only save FPS report periodically
-            current_time = time.time()
-            if current_time - last_fps_print >= 10.0:  # Every 10 seconds
-                print(f"Current FPS: {fps:.1f}")
-                cv2.imwrite(f"fps_report_{int(current_time)}.jpg", processed_frame)
-                last_fps_print = current_time
-            
-            # Sleep to maintain target FPS
-            frame_time = time.time() - loop_start_time
-            sleep_time = max(0, (1.0 / FPS) - frame_time)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-            
-    except KeyboardInterrupt:
-        print("Keyboard interrupt detected. Exiting...")
-        
-        # Make sure to turn off all relays when exiting
-        if not DEV_MODE:
-            # Use RELAY_PINS directly
-            GPIO.output(RELAY_PINS['left'], GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)
-            GPIO.output(RELAY_PINS['right'], GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW)
-            GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
-        
-    except Exception as e:
-        print(f"Error in main loop: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
-    finally:
-        # Clean up resources
-        cleanup()
-        
-        # Clean up video writer
-        if RECORD_VIDEO and 'video_writer' in locals() and video_writer is not None:
-            cleanup_video_writer(video_writer)
-            
-        print("Program terminated")
+            run_sample_test = False
 
-try:
-    main()
-except Exception as e:
-    print(f"Error: {e}")
-    if 'camera' in locals():
-        cleanup_camera(camera)
-    if DEV_MODE:
-        pygame.mixer.quit()
-    
-print("Resources cleaned up")
+        # --- Read Frame ---
+        frame = read_frame(camera)
+        if frame is None:
+            print("Warning: Failed to read frame, skipping iteration.")
+            time.sleep(0.1) # Avoid busy-looping on error
+            continue
+
+        # --- Inference (Periodic) ---
+        detections = []
+        run_inference = (frame_count % FRAME_SKIP == 0)
+        if run_inference:
+            try:
+                # Perform inference using the loaded Degirum model
+                inference_start = time.time()
+                results_generator = model.predict_batch([frame])
+                results = next(results_generator) # Get result for the single frame
+                inference_time = time.time() - inference_start
+
+                # Process results into a standard format
+                detections = process_detections(frame, results)
+                if VERBOSE_OUTPUT:
+                     print(f"Inference took {inference_time:.4f}s, Found {len(detections)} objects.")
+
+            except Exception as e:
+                print(f"Error during inference or processing: {e}")
+                # Proceed with empty detections list on error
+                detections = []
+
+        # --- Action & Control ---
+        current_target_error = None # Reset for this frame
+        if detections:
+            # Target the highest confidence detection
+            target_detection = detections[0]
+
+            # Check if it's a class we want to control/squirt
+            if target_detection['category_id'] in CLASSES_TO_DETECT:
+                # Call PD control handler - it handles movement and squirts
+                current_target_error = handle_pd_control(
+                    target_detection['bbox'],
+                    FRAME_WIDTH
+                )
+        else:
+             # No detections this frame
+             if VERBOSE_OUTPUT: print("No detections this frame.")
+             # Reset previous error if no detection for a while
+             if time.time() - last_detection_time > POSITION_RESET_TIME:
+                  if previous_error != 0.0:
+                       print(f"Resetting PD 'previous_error' due to inactivity ({POSITION_RESET_TIME}s).")
+                       previous_error = 0.0
+
+        # --- Update FPS ---
+        fps_counter.update()
+        current_fps = fps_counter.get_fps()
+        if time.time() - last_fps_print_time >= 5.0: # Print FPS every 5 seconds
+             print(f"FPS: {current_fps:.1f}")
+             last_fps_print_time = time.time()
+
+        # --- Draw Visualization ---
+        display_frame = draw_frame_elements(frame, current_fps, detections, current_target_error)
+
+        # --- Video Recording ---
+        # Always record for the first VIDEO_START_RECORD_DURATION seconds
+        elapsed_program_time = time.time() - program_start_time
+        should_be_recording = RECORD_VIDEO or (elapsed_program_time < VIDEO_START_RECORD_DURATION)
+
+        if should_be_recording:
+             if video_writer is None: # Start writer if needed and not already running
+                 video_writer = init_video_writer()
+                 if video_writer: video_start_time = time.time()
+
+             if video_writer is not None:
+                 try:
+                     video_writer.write(display_frame)
+                     # Check for max video length
+                     if time.time() - video_start_time >= VIDEO_MAX_LENGTH:
+                         print(f"Video segment reached max length ({VIDEO_MAX_LENGTH}s). Creating new file.")
+                         video_writer.release()
+                         video_writer = init_video_writer()
+                         if video_writer: video_start_time = time.time()
+
+                 except Exception as e:
+                     print(f"Error writing video frame: {e}")
+                     # Attempt to close and restart writer
+                     try: video_writer.release()
+                     except: pass
+                     video_writer = None # Stop trying to write to broken writer
+
+        elif video_writer is not None: # If recording should stop (initial duration ended & RECORD_VIDEO=False)
+             print("Stopping initial video recording period.")
+             video_writer.release()
+             video_writer = None
+
+        # --- Optional: Save Debug Frames ---
+        if SAVE_DEBUG_FRAMES and detections and (frame_num_global % DEBUG_FRAME_INTERVAL == 0):
+             save_debug_frame(display_frame)
+
+        # --- Frame Rate Control ---
+        loop_end = time.monotonic()
+        loop_duration = loop_end - loop_start
+        sleep_time = (1.0 / TARGET_FPS) - loop_duration
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
+        frame_count += 1
+
+    # End of main loop
+    print("Main loop exited.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"\n--- UNHANDLED EXCEPTION IN MAIN ---")
+        print(f"Error Type: {type(e).__name__}")
+        print(f"Error Details: {e}")
+        traceback.print_exc()
+        print("Attempting cleanup...")
+    finally:
+        # Ensure cleanup runs even if main crashes
+        cleanup()
+        print("Program terminated.")
