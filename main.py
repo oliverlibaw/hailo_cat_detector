@@ -90,9 +90,10 @@ VIDEO_RESOLUTION = (FRAME_WIDTH, FRAME_HEIGHT)
 VIDEO_START_RECORD_DURATION = 60 # Record for this many seconds after script start, even if RECORD_VIDEO is False
 
 # Debugging & Output
-VERBOSE_OUTPUT = False # Print detailed logs
-SAVE_DEBUG_FRAMES = False # Save frames with detections periodically
-DEBUG_FRAME_INTERVAL = 30 # Save every Nth detected frame
+DEBUG_MODE = True     # Master debug switch
+VERBOSE_OUTPUT = True # Print detailed logs
+SAVE_DEBUG_FRAMES = True # Save frames with detections periodically
+DEBUG_FRAME_INTERVAL = 10 # Save every Nth detected frame
 MAX_SAVED_FRAMES = 20 # Max number of debug frames to keep
 
 # COCO Class Names (for labels)
@@ -1033,6 +1034,11 @@ def save_debug_frame(frame, base_filename="detection"):
      except Exception as e:
          print(f"Error saving debug frame: {e}")
 
+def debug_print(message, force=False):
+    """Print a debug message only if DEBUG_MODE is enabled or force is True"""
+    if DEBUG_MODE or force:
+        print(f"[DEBUG] {message}")
+
 
 # --- Test Functions ---
 
@@ -1060,9 +1066,9 @@ def test_relays():
 
 def test_model_on_sample(model_instance):
     """Run inference on a sample image if available."""
-    sample_image_path = "sample_cat.jpg" # Or another relevant image
-    if not os.path.exists(sample_image_path):
-        print(f"Sample image '{sample_image_path}' not found, skipping test.")
+    sample_image_path = ensure_sample_image("sample_cat.jpg")
+    if not sample_image_path:
+        print("Could not get a sample image for testing, skipping test.")
         return
 
     print(f"\n--- Testing Model on Sample Image: {sample_image_path} ---")
@@ -1072,22 +1078,26 @@ def test_model_on_sample(model_instance):
             print("Error: Failed to load sample image.")
             return
 
-        # Resize if necessary to match model input
-        if img.shape[0] != MODEL_INPUT_SIZE[1] or img.shape[1] != MODEL_INPUT_SIZE[0]:
-            img_resized = cv2.resize(img, MODEL_INPUT_SIZE)
-        else:
-            img_resized = img
+        # Preprocess image for model inference (consistent with main loop)
+        preprocessed_img = preprocess_frame(img, MODEL_INPUT_SIZE)
+        
+        print(f"Sample image shape after preprocessing: {preprocessed_img.shape}")
 
         print("Running inference on sample...")
         # Use predict_batch as it's common for Degirum models
-        results_generator = model_instance.predict_batch([img_resized])
+        results_generator = model_instance.predict_batch([preprocessed_img])
         results = next(results_generator) # Get the result for the single image
 
         print("Processing sample results...")
-        detections = process_detections(img_resized, results)
+        detections = process_detections(preprocessed_img, results)
 
         print(f"Found {len(detections)} objects in sample.")
-        annotated_frame = draw_frame_elements(img_resized, 0, detections) # Draw results
+        
+        # Print detection details for debugging
+        for i, det in enumerate(detections):
+            print(f"  Detection {i+1}: {det['label']} ({det['score']:.2f}) at {det['bbox']}")
+            
+        annotated_frame = draw_frame_elements(preprocessed_img, 0, detections) # Draw results
 
         save_filename = "sample_detection_output.jpg"
         cv2.imwrite(save_filename, annotated_frame)
@@ -1192,21 +1202,41 @@ def main():
         
     setup_sound() # Initialize sound if available
 
-    model = load_model(HAILO_MODEL_NAME, HAILO_ZOO_PATH)
+    # Find the model zoo path
+    model_zoo_path = find_model_zoo_path()
+    
+    # Try loading the model
+    model = load_model(HAILO_MODEL_NAME, model_zoo_path)
     if model is None:
         print("Primary model failed to load, trying fallbacks...")
-        model = load_fallback_model(HAILO_ZOO_PATH)
+        model = load_fallback_model(model_zoo_path)
     if model is None:
         print("CRITICAL: Failed to load any model.")
         print("Will exit in 3 seconds...")
         time.sleep(3)
         sys.exit(1)
 
+    # Print model information
     try:
-        test_model_on_sample(model) # Test the loaded model
+        if hasattr(model, 'model_name'):
+            print(f"Model name: {model.model_name}")
+        if hasattr(model, 'input_shape'):
+            print(f"Model input shape: {model.input_shape}")
+        if hasattr(model, 'output_names'):
+            print(f"Model output names: {model.output_names}")
+        print(f"Detection threshold: {DETECTION_THRESHOLD}")
+        print(f"Classes to detect: {CLASSES_TO_DETECT} ({[COCO_CLASSES.get(cls_id, f'Unknown {cls_id}') for cls_id in CLASSES_TO_DETECT]})")
+    except Exception as e:
+        print(f"Warning: Could not print model information: {e}")
+
+    # Always run the test model on a sample image
+    print("\nRunning test on sample image to verify model functionality...")
+    try:
+        test_model_on_sample(model)
     except Exception as e:
         print(f"WARNING: Model sample test failed: {e}")
-        print("Will attempt to continue anyway.")
+        print("Will attempt to continue anyway, but this may indicate the model isn't working correctly.")
+        traceback.print_exc()
 
     try:
         camera = setup_camera()
@@ -1252,19 +1282,39 @@ def main():
         run_inference = (frame_count % FRAME_SKIP == 0)
         if run_inference:
             try:
+                # Preprocess frame for the model
+                preprocessed_frame = preprocess_frame(frame, MODEL_INPUT_SIZE)
+                
+                # Log information about the frame
+                if VERBOSE_OUTPUT:
+                    print(f"Frame shape before inference: {preprocessed_frame.shape}")
+                    print(f"Frame dtype: {preprocessed_frame.dtype}")
+                    print(f"Frame min/max values: {np.min(preprocessed_frame)}/{np.max(preprocessed_frame)}")
+                
                 # Perform inference using the loaded Degirum model
                 inference_start = time.time()
-                results_generator = model.predict_batch([frame])
+                
+                # Create a batch with a single frame
+                results_generator = model.predict_batch([preprocessed_frame])
                 results = next(results_generator) # Get result for the single frame
                 inference_time = time.time() - inference_start
-
-                # Process results into a standard format
-                detections = process_detections(frame, results)
+                
                 if VERBOSE_OUTPUT:
-                     print(f"Inference took {inference_time:.4f}s, Found {len(detections)} objects.")
+                    print(f"Inference completed in {inference_time:.4f}s")
+                    print(f"Results type: {type(results)}")
+                    if hasattr(results, 'results'):
+                        print(f"Results contains {len(results.results)} items")
+                        
+                # Process results into a standard format
+                detections = process_detections(preprocessed_frame, results)
+                if VERBOSE_OUTPUT:
+                    print(f"Found {len(detections)} objects after processing")
+                    for i, det in enumerate(detections):
+                        print(f"  Detection {i+1}: {det['label']} ({det['score']:.2f}) at {det['bbox']}")
 
             except Exception as e:
                 print(f"Error during inference or processing: {e}")
+                traceback.print_exc()  # Print the full stack trace for debugging
                 # Proceed with empty detections list on error
                 detections = []
 
@@ -1362,3 +1412,102 @@ if __name__ == "__main__":
         # Ensure cleanup runs even if main crashes
         cleanup()
         print("Program terminated.")
+
+def preprocess_frame(frame, target_size=(640, 640)):
+    """
+    Preprocess a frame for model inference by resizing and normalizing.
+    
+    Args:
+        frame: Input BGR frame from camera
+        target_size: Target size (width, height) for the model input
+        
+    Returns:
+        Preprocessed frame ready for model inference
+    """
+    # Resize frame to match model input size
+    if frame.shape[0] != target_size[1] or frame.shape[1] != target_size[0]:
+        resized = cv2.resize(frame, target_size)
+        if VERBOSE_OUTPUT:
+            print(f"Resized frame from {frame.shape[1]}x{frame.shape[0]} to {target_size[0]}x{target_size[1]}")
+    else:
+        resized = frame
+    
+    # Make sure we're in the expected color format (BGR for OpenCV)
+    # The model might expect RGB, but the DeGirum library likely handles this conversion
+    
+    # Create a copy to avoid any issues with buffer overwriting
+    processed = resized.copy()
+    
+    # Print shape for debugging
+    if VERBOSE_OUTPUT:
+        print(f"Preprocessed frame shape: {processed.shape}")
+    
+    return processed
+
+def ensure_sample_image(filename="sample_cat.jpg"):
+    """Ensure a sample image exists for testing, create one if it doesn't."""
+    if os.path.exists(filename):
+        print(f"Sample image exists: {filename}")
+        return filename
+    
+    print(f"Sample image not found: {filename}. Will create a basic test image.")
+    
+    # Create a basic test image
+    try:
+        # Create a black image with a colored rectangle
+        img = np.zeros((MODEL_INPUT_SIZE[1], MODEL_INPUT_SIZE[0], 3), dtype=np.uint8)
+        
+        # Draw a cat-like shape (simplified)
+        cv2.rectangle(img, (200, 200), (400, 400), (0, 0, 255), -1)  # Red rectangle
+        cv2.circle(img, (250, 250), 30, (255, 0, 0), -1)  # Blue circle (left eye)
+        cv2.circle(img, (350, 250), 30, (255, 0, 0), -1)  # Blue circle (right eye)
+        cv2.ellipse(img, (300, 350), (50, 20), 0, 0, 180, (255, 255, 255), -1)  # White ellipse (mouth)
+        
+        # Add text label
+        cv2.putText(img, "Test Cat", (200, 180), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        # Save the image
+        cv2.imwrite(filename, img)
+        print(f"Created test image: {filename}")
+        return filename
+    except Exception as e:
+        print(f"Error creating sample image: {e}")
+        return None
+
+def find_model_zoo_path():
+    """
+    Locate the Degirum model zoo path.
+    Checks several common locations and returns the first valid path.
+    """
+    # Default path from configuration
+    paths_to_check = [
+        HAILO_ZOO_PATH,
+        # Alternative potential locations
+        "/home/pi/degirum_model_zoo",
+        "/opt/degirum/model_zoo",
+        "./degirum_model_zoo",
+        os.path.expanduser("~/degirum_model_zoo"),
+    ]
+    
+    for path in paths_to_check:
+        if os.path.exists(path):
+            print(f"Found model zoo at: {path}")
+            try:
+                # Check if it contains at least one model
+                model_count = 0
+                for item in os.listdir(path):
+                    item_path = os.path.join(path, item)
+                    if os.path.isdir(item_path):
+                        model_count += 1
+                
+                if model_count > 0:
+                    print(f"Model zoo contains {model_count} potential model directories")
+                    return path
+                else:
+                    print(f"Warning: Path {path} exists but contains no model directories")
+            except Exception as e:
+                print(f"Error accessing {path}: {e}")
+    
+    print("WARNING: Could not find a valid model zoo path")
+    print("Using default path despite issues, model loading will likely fail")
+    return HAILO_ZOO_PATH
