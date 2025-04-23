@@ -1058,50 +1058,6 @@ def test_relays():
 
     print("Relay test complete.\n")
 
-def test_model_on_sample(model_instance):
-    """Run inference on a sample image if available."""
-    sample_image_path = ensure_sample_image("sample_cat.jpg")
-    if not sample_image_path:
-        print("Could not get a sample image for testing, skipping test.")
-        return
-
-    print(f"\n--- Testing Model on Sample Image: {sample_image_path} ---")
-    try:
-        img = cv2.imread(sample_image_path)
-        if img is None:
-            print("Error: Failed to load sample image.")
-            return
-
-        # Preprocess image for model inference (consistent with main loop)
-        preprocessed_img = preprocess_frame(img, MODEL_INPUT_SIZE)
-        
-        print(f"Sample image shape after preprocessing: {preprocessed_img.shape}")
-
-        print("Running inference on sample...")
-        # Use predict_batch as it's common for Degirum models
-        results_generator = model_instance.predict_batch([preprocessed_img])
-        results = next(results_generator) # Get the result for the single image
-
-        print("Processing sample results...")
-        detections = process_detections(preprocessed_img, results)
-
-        print(f"Found {len(detections)} objects in sample.")
-        
-        # Print detection details for debugging
-        for i, det in enumerate(detections):
-            print(f"  Detection {i+1}: {det['label']} ({det['score']:.2f}) at {det['bbox']}")
-            
-        annotated_frame = draw_frame_elements(preprocessed_img, 0, detections) # Draw results
-
-        save_filename = "sample_detection_output.jpg"
-        cv2.imwrite(save_filename, annotated_frame)
-        print(f"Saved annotated sample output to: {save_filename}")
-        print("--- Sample Test Complete ---\n")
-
-    except Exception as e:
-        print(f"Error during sample image test: {e}")
-        traceback.print_exc()
-
 def test_degirum_setup():
      """Basic check for DeGirum and Hailo."""
      print("\n--- Checking DeGirum and Hailo Setup ---")
@@ -1208,6 +1164,37 @@ def find_model_zoo_path():
     print("WARNING: Could not find a valid model zoo path")
     print("Using default path despite issues, model loading will likely fail")
     return HAILO_ZOO_PATH
+
+def preprocess_frame(frame, target_size=(640, 640)):
+    """
+    Preprocess a frame for model inference by resizing and normalizing.
+    
+    Args:
+        frame: Input BGR frame from camera
+        target_size: Target size (width, height) for the model input
+        
+    Returns:
+        Preprocessed frame ready for model inference
+    """
+    # Resize frame to match model input size
+    if frame.shape[0] != target_size[1] or frame.shape[1] != target_size[0]:
+        resized = cv2.resize(frame, target_size)
+        if VERBOSE_OUTPUT:
+            print(f"Resized frame from {frame.shape[1]}x{frame.shape[0]} to {target_size[0]}x{target_size[1]}")
+    else:
+        resized = frame
+    
+    # Make sure we're in the expected color format (BGR for OpenCV)
+    # The model might expect RGB, but the DeGirum library likely handles this conversion
+    
+    # Create a copy to avoid any issues with buffer overwriting
+    processed = resized.copy()
+    
+    # Print shape for debugging
+    if VERBOSE_OUTPUT:
+        print(f"Preprocessed frame shape: {processed.shape}")
+    
+    return processed
 
 def main():
     global video_writer, camera, model, previous_error, last_detection_time
@@ -1442,64 +1429,3 @@ if __name__ == "__main__":
         # Ensure cleanup runs even if main crashes
         cleanup()
         print("Program terminated.")
-
-def preprocess_frame(frame, target_size=(640, 640)):
-    """
-    Preprocess a frame for model inference by resizing and normalizing.
-    
-    Args:
-        frame: Input BGR frame from camera
-        target_size: Target size (width, height) for the model input
-        
-    Returns:
-        Preprocessed frame ready for model inference
-    """
-    # Resize frame to match model input size
-    if frame.shape[0] != target_size[1] or frame.shape[1] != target_size[0]:
-        resized = cv2.resize(frame, target_size)
-        if VERBOSE_OUTPUT:
-            print(f"Resized frame from {frame.shape[1]}x{frame.shape[0]} to {target_size[0]}x{target_size[1]}")
-    else:
-        resized = frame
-    
-    # Make sure we're in the expected color format (BGR for OpenCV)
-    # The model might expect RGB, but the DeGirum library likely handles this conversion
-    
-    # Create a copy to avoid any issues with buffer overwriting
-    processed = resized.copy()
-    
-    # Print shape for debugging
-    if VERBOSE_OUTPUT:
-        print(f"Preprocessed frame shape: {processed.shape}")
-    
-    return processed
-
-def ensure_sample_image(filename="sample_cat.jpg"):
-    """Ensure a sample image exists for testing, create one if it doesn't."""
-    if os.path.exists(filename):
-        print(f"Sample image exists: {filename}")
-        return filename
-    
-    print(f"Sample image not found: {filename}. Will create a basic test image.")
-    
-    # Create a basic test image
-    try:
-        # Create a black image with a colored rectangle
-        img = np.zeros((MODEL_INPUT_SIZE[1], MODEL_INPUT_SIZE[0], 3), dtype=np.uint8)
-        
-        # Draw a cat-like shape (simplified)
-        cv2.rectangle(img, (200, 200), (400, 400), (0, 0, 255), -1)  # Red rectangle
-        cv2.circle(img, (250, 250), 30, (255, 0, 0), -1)  # Blue circle (left eye)
-        cv2.circle(img, (350, 250), 30, (255, 0, 0), -1)  # Blue circle (right eye)
-        cv2.ellipse(img, (300, 350), (50, 20), 0, 0, 180, (255, 255, 255), -1)  # White ellipse (mouth)
-        
-        # Add text label
-        cv2.putText(img, "Test Cat", (200, 180), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        
-        # Save the image
-        cv2.imwrite(filename, img)
-        print(f"Created test image: {filename}")
-        return filename
-    except Exception as e:
-        print(f"Error creating sample image: {e}")
-        return None
