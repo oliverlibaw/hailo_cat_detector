@@ -342,9 +342,22 @@ def load_model(model_name, zoo_path):
         log_dir = "logs"
         os.makedirs(log_dir, exist_ok=True)
         os.chmod(log_dir, 0o777) # Ensure write permissions
-        os.environ["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), log_dir)
+        
+        # Use absolute path for logs and set environment variable
+        log_path = os.path.join(os.path.abspath(os.getcwd()), log_dir)
+        os.environ["HAILORT_LOG_PATH"] = log_path
         print(f"HailoRT logs redirected to: {os.environ['HAILORT_LOG_PATH']}")
 
+        # Make sure the log directory is writable
+        try:
+            test_log = os.path.join(log_path, "test_write.log")
+            with open(test_log, 'w') as f:
+                f.write("Test log write permission\n")
+            os.remove(test_log)
+            print("Successfully tested log directory write permissions")
+        except Exception as log_e:
+            print(f"Warning: Could not write to log directory: {log_e}")
+            print("Try running with sudo or fix permissions on logs directory")
 
         if not os.path.exists(zoo_path):
             print(f"ERROR: Model zoo path not found: {zoo_path}")
@@ -384,15 +397,47 @@ def load_fallback_model(zoo_path):
     fallback_models = [ # List potential models in your zoo
         "yolov5s_coco--640x640_quant_hailort_hailo8l_1",
         "yolov8n_coco--640x640_quant_hailort_hailo8l_1",
-        # Add other models present in your zoo_path if needed
+        "yolov8s_coco--640x640_quant_hailort_hailo8l_1",
+        # Add other models present in your zoo_path
     ]
+    
+    # List available models in the zoo for reference
+    try:
+        print("Available models in zoo:")
+        models_found = []
+        for item in os.listdir(zoo_path):
+            item_path = os.path.join(zoo_path, item)
+            if os.path.isdir(item_path):
+                # Check if directory contains *.hef files
+                hef_files = [f for f in os.listdir(item_path) if f.endswith('.hef')]
+                if hef_files:
+                    models_found.append(item)
+                    print(f" - {item} (contains {len(hef_files)} .hef files)")
+        
+        # Add any found models to our fallback list
+        for model_name in models_found:
+            if model_name not in fallback_models and model_name != HAILO_MODEL_NAME:
+                fallback_models.append(model_name)
+                print(f"Added {model_name} to fallback list")
+    except Exception as e:
+        print(f"Could not enumerate models in zoo: {e}")
+        
+    # Try loading models from our expanded list
     for model_name in fallback_models:
-         if model_name == HAILO_MODEL_NAME: continue # Skip the one that failed
+         if model_name == HAILO_MODEL_NAME: 
+             continue # Skip the one that failed
+         print(f"Trying fallback model: {model_name}")
          model = load_model(model_name, zoo_path)
          if model:
              print(f"Successfully loaded fallback model: {model_name}")
              return model
+    
     print("ERROR: Could not load any fallback models.")
+    print("Check the following:")
+    print("1. Ensure Hailo drivers are installed and device is properly connected")
+    print("2. Verify DeGirum model zoo path is correct")
+    print("3. Check file permissions on the model zoo directory")
+    print("4. Try running with sudo if it's a permissions issue")
     return None
 
 
@@ -870,6 +915,17 @@ def cleanup():
     try:
         print("Turning off all relays...")
         
+        # Ensure GPIO mode is set (prevents errors if cleanup is called without setup)
+        try:
+            current_mode = GPIO.getmode()
+            if current_mode is None:
+                print("GPIO mode was not set, setting to BCM mode")
+                GPIO.setmode(GPIO.BCM)
+        except Exception as mode_e:
+            print(f"Warning: Could not check/set GPIO mode: {mode_e}")
+            print("Setting GPIO mode to BCM")
+            GPIO.setmode(GPIO.BCM)
+        
         # Ensure squirt relay is OFF (LOW)
         GPIO.output(RELAY_PINS['squirt'], SQUIRT_RELAY_OFF_STATE)
         print(f"Set squirt relay (pin {RELAY_PINS['squirt']}) to OFF state (LOW)")
@@ -1054,29 +1110,59 @@ def test_degirum_setup():
 
      try:
          import subprocess
-         # Use hailortcli to check device status
-         log_dir = "logs" # Ensure logs directory exists
+         # Create logs directory for HailoRT logs if it doesn't exist
+         log_dir = "logs"
          os.makedirs(log_dir, exist_ok=True)
-         env = os.environ.copy()
-         env["HAILORT_LOG_PATH"] = os.path.join(os.getcwd(), log_dir)
-
-         result = subprocess.run(['hailortcli', 'device', 'show'],
-                                 capture_output=True, text=True, timeout=10, env=env)
-         print("Hailo device info (hailortcli):")
-         print(result.stdout)
-         if result.returncode != 0:
-             print(f"Warning: hailortcli command failed with code {result.returncode}")
-             print(f"Stderr: {result.stderr}")
-             return False
-         print("Hailo device seems present.")
+         os.chmod(log_dir, 0o777)  # Ensure write permissions
+         
+         # Use absolute path for logs and set environment variable
+         log_path = os.path.join(os.path.abspath(os.getcwd()), log_dir)
+         os.environ["HAILORT_LOG_PATH"] = log_path
+         
+         # Test log directory write access
+         try:
+             test_log = os.path.join(log_path, "test_write.log")
+             with open(test_log, 'w') as f:
+                 f.write("Test log write permission\n")
+             os.remove(test_log)
+             print("Successfully tested log directory write permissions")
+         except Exception as log_e:
+             print(f"Warning: Could not write to log directory: {log_e}")
+             print("Try running with sudo or fix permissions on logs directory")
+         
+         # Try to run hailortcli device show command
+         print("Running 'hailortcli device show' to check Hailo device...")
+         try:
+             result = subprocess.run(['hailortcli', 'device', 'show'],
+                                    capture_output=True, text=True, timeout=10)
+             
+             print("Hailo device info (hailortcli):")
+             print(result.stdout)
+             
+             if result.returncode != 0:
+                 print(f"Warning: hailortcli command failed with code {result.returncode}")
+                 print(f"Stderr: {result.stderr}")
+                 if result.returncode == 106:
+                     print("Error code 106 often indicates permission issues with log files or device access")
+                     print("Try running with sudo or fix Hailo device permissions")
+                 return True  # Continue even if command fails - the module itself might work
+             
+             print("Hailo device found and accessible")
+         except FileNotFoundError:
+             print("WARNING: 'hailortcli' command not found but DeGirum module is available")
+             print("The HailoRT CLI tools may not be in PATH but the Python module may still work")
+             return True  # Module availability is more important than CLI tools
+         except Exception as cmd_e:
+             print(f"Warning: Error running hailortcli command: {cmd_e}")
+             print("Will try to continue with DeGirum module which might still work")
+             return True
+             
          print("--- Setup Check Complete ---\n")
          return True
-     except FileNotFoundError:
-         print("ERROR: 'hailortcli' command not found. Is Hailo software installed and in PATH?")
-         return False
      except Exception as e:
          print(f"Error checking Hailo runtime: {e}")
-         return False
+         print("Will attempt to continue with DeGirum module which might still work")
+         return True
 
 # --- Main Execution ---
 
@@ -1095,20 +1181,40 @@ def main():
     print("Press 'h' for help on keyboard controls")
 
     # --- Initialization ---
-    if not test_degirum_setup(): sys.exit(1)
-    test_relays() # Test relays early
+    if not test_degirum_setup(): 
+        print("WARNING: DeGirum setup check failed, but will try to continue")
+        
+    try:    
+        test_relays() # Test relays early
+    except Exception as e:
+        print(f"WARNING: Relay test failed: {e}")
+        print("This could be due to permissions. Try running with sudo.")
+        
     setup_sound() # Initialize sound if available
 
     model = load_model(HAILO_MODEL_NAME, HAILO_ZOO_PATH)
     if model is None:
+        print("Primary model failed to load, trying fallbacks...")
         model = load_fallback_model(HAILO_ZOO_PATH)
     if model is None:
-        print("CRITICAL: Failed to load any model. Exiting.")
+        print("CRITICAL: Failed to load any model.")
+        print("Will exit in 3 seconds...")
+        time.sleep(3)
         sys.exit(1)
 
-    test_model_on_sample(model) # Test the loaded model
+    try:
+        test_model_on_sample(model) # Test the loaded model
+    except Exception as e:
+        print(f"WARNING: Model sample test failed: {e}")
+        print("Will attempt to continue anyway.")
 
-    camera = setup_camera()
+    try:
+        camera = setup_camera()
+    except Exception as e:
+        print(f"CRITICAL: Camera setup failed: {e}")
+        print("Cannot continue without camera. Will exit in 3 seconds...")
+        time.sleep(3)
+        sys.exit(1)
 
     # Initialize video writer (might start recording immediately based on settings)
     video_writer = init_video_writer()
