@@ -329,7 +329,7 @@ def setup_sound():
     return False
 
 def load_model(model_name, zoo_path):
-    """Load the specified Degirum model."""
+    """Load the specified Degirum model for Hailo hardware acceleration."""
     try:
         print(f"Loading Degirum model: {model_name} from {zoo_path}")
 
@@ -354,12 +354,27 @@ def load_model(model_name, zoo_path):
             print(f"Warning: Could not write to log directory: {log_e}")
             print("Try running with sudo or fix permissions on logs directory")
 
+        # Check for Hailo device
+        try:
+            import subprocess
+            result = subprocess.run(['hailortcli', 'device', 'show'], 
+                                    capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                print("Hailo device check successful:")
+                print(result.stdout.strip())
+            else:
+                print(f"Warning: Hailo device check failed with code {result.returncode}")
+                print(f"Error: {result.stderr.strip()}")
+                print("Will attempt to use Degirum API directly which might still work")
+        except Exception as check_e:
+            print(f"Note: Could not check Hailo device: {check_e}")
+            print("Will proceed with model loading anyway")
+
         if not os.path.exists(zoo_path):
             print(f"ERROR: Model zoo path not found: {zoo_path}")
             return None
 
         # Construct the full path to the model file (assuming .hef extension)
-        # Degirum usually handles finding the .hef within the named folder
         model_path_check = os.path.join(zoo_path, model_name)
         if not os.path.exists(model_path_check):
              print(f"Warning: Model directory not found at {model_path_check}. Degirum will try to find it.")
@@ -371,6 +386,13 @@ def load_model(model_name, zoo_path):
              except Exception as list_e:
                  print(f"Could not list zoo contents: {list_e}")
 
+        print(f"Loading model with Degirum API...")
+        print(f"  Model name: {model_name}")
+        print(f"  Inference host: {HAILO_INFERENCE_ADDRESS}")
+        print(f"  Zoo path: {zoo_path}")
+        print(f"  Confidence threshold: {DETECTION_THRESHOLD}")
+        
+        # Attempt to load the model
         loaded_model = dg.load_model(
             model_name=model_name,
             inference_host_address=HAILO_INFERENCE_ADDRESS,
@@ -379,6 +401,19 @@ def load_model(model_name, zoo_path):
             # Removed overlay params for simplicity, handled by opencv drawing
         )
         print(f"Model '{model_name}' loaded successfully.")
+        
+        # Print model information
+        if hasattr(loaded_model, 'input_shape'):
+            print(f"Model input shape: {loaded_model.input_shape}")
+            # Validate that model input shape matches our configured size
+            if loaded_model.input_shape and len(loaded_model.input_shape) > 0:
+                model_height, model_width = loaded_model.input_shape[0][1:3]
+                if model_height != MODEL_INPUT_SIZE[1] or model_width != MODEL_INPUT_SIZE[0]:
+                    print(f"WARNING: Model expects {model_width}x{model_height} but configuration is set to {MODEL_INPUT_SIZE[0]}x{MODEL_INPUT_SIZE[1]}")
+                    print(f"Adjusting MODEL_INPUT_SIZE to match model requirements")
+                    global MODEL_INPUT_SIZE
+                    MODEL_INPUT_SIZE = (model_width, model_height)
+        
         return loaded_model
 
     except Exception as e:
@@ -387,13 +422,13 @@ def load_model(model_name, zoo_path):
         return None
 
 def load_fallback_model(zoo_path):
-    """Try loading common fallback models if the primary fails."""
+    """Try loading alternative Hailo models if the primary fails."""
     print("Attempting to load a fallback model...")
-    fallback_models = [ # List potential models in your zoo
+    # Only include Hailo models - no CPU fallback as YOLO won't run efficiently on Pi CPU
+    fallback_models = [ # List potential Hailo accelerated models in your zoo
         "yolov5s_coco--640x640_quant_hailort_hailo8l_1",
         "yolov8n_coco--640x640_quant_hailort_hailo8l_1",
         "yolov8s_coco--640x640_quant_hailort_hailo8l_1",
-        # Add other models present in your zoo_path
     ]
     
     # List available models in the zoo for reference
@@ -403,7 +438,7 @@ def load_fallback_model(zoo_path):
         for item in os.listdir(zoo_path):
             item_path = os.path.join(zoo_path, item)
             if os.path.isdir(item_path):
-                # Check if directory contains *.hef files
+                # Only look for Hailo-compatible .hef files
                 hef_files = [f for f in os.listdir(item_path) if f.endswith('.hef')]
                 if hef_files:
                     models_found.append(item)
@@ -412,8 +447,10 @@ def load_fallback_model(zoo_path):
         # Add any found models to our fallback list
         for model_name in models_found:
             if model_name not in fallback_models and model_name != HAILO_MODEL_NAME:
-                fallback_models.append(model_name)
-                print(f"Added {model_name} to fallback list")
+                # Only add if it has hailo8l or similar in the name (indicating Hailo compatibility)
+                if "hailo" in model_name.lower():
+                    fallback_models.append(model_name)
+                    print(f"Added {model_name} to fallback list")
     except Exception as e:
         print(f"Could not enumerate models in zoo: {e}")
         
@@ -530,6 +567,9 @@ def process_detections(frame, model_results):
             print(f"Raw results type: {type(model_results)}")
             if hasattr(model_results, 'results'):
                 print(f"Results has 'results' attribute with {len(model_results.results)} items")
+                # Print first result for debugging if available
+                if model_results.results and len(model_results.results) > 0:
+                    print(f"First result structure: {model_results.results[0]}")
                 
         # --- Process different result structures ---
         if hasattr(model_results, 'results') and isinstance(model_results.results, list):
@@ -542,151 +582,101 @@ def process_detections(frame, model_results):
                 if result_list and isinstance(result_list[0], dict):
                     print(f"First result keys: {list(result_list[0].keys())}")
                     
-            # Process individual results in the list
-            for detection_result in result_list:
-                # Format 1: Dictionary with 'detections' key
-                if isinstance(detection_result, dict) and 'detections' in detection_result:
-                    for det in detection_result['detections']:
-                        if 'bbox' in det and ('score' in det or 'confidence' in det) and ('class_id' in det or 'category_id' in det):
-                            bbox = det['bbox']
-                            score = float(det.get('score', det.get('confidence', 0.0)))
-                            class_id = int(det.get('class_id', det.get('category_id', -1)))
-                            
-                            if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
-                                # Process valid detection
-                                x1, y1, x2, y2 = map(int, bbox)
-                                
-                                # Validate coordinates
-                                x1 = max(0, min(width - 1, x1))
-                                y1 = max(0, min(height - 1, y1))
-                                x2 = max(0, min(width - 1, x2))
-                                y2 = max(0, min(height - 1, y2))
-                                
-                                # Skip invalid boxes
-                                if x2 <= x1 or y2 <= y1:
-                                    continue
-                                    
-                                label = COCO_CLASSES.get(class_id, f"ClassID {class_id}")
-                                detections.append({
-                                    'bbox': (x1, y1, x2, y2),
-                                    'score': score,
-                                    'category_id': class_id,
-                                    'label': label
-                                })
+            # Direct processing of Degirum DetectionResults format
+            for detection in result_list:
+                # Debug the detection structure in more detail
+                if VERBOSE_OUTPUT:
+                    print(f"Processing detection: {detection}")
                 
-                # Format 2: Dictionary with 'data' key (YOLO-style output)
-                elif isinstance(detection_result, dict) and 'data' in detection_result:
-                    data = detection_result['data']
+                # Check if detection has the expected keys directly
+                if isinstance(detection, dict) and 'bbox' in detection and 'score' in detection:
+                    bbox = detection['bbox']
+                    score = float(detection['score'])
                     
-                    if isinstance(data, np.ndarray):
-                        # Determine the format based on shape
-                        if len(data.shape) == 4:  # [batch, grid_h, grid_w, values]
-                            data = data.reshape(-1, data.shape[-1])
-                        elif len(data.shape) == 3:  # [grid_h, grid_w, values]
-                            data = data.reshape(-1, data.shape[-1])
-                            
-                        # Format 2a: Each row is [x1, y1, x2, y2, score, class_id]
-                        if data.shape[1] == 6:
-                            for box_data in data:
-                                x1, y1, x2, y2, score, class_id = box_data
-                                
-                                # Convert to proper types
-                                class_id = int(class_id)
-                                score = float(score)
-                                
-                                if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
-                                    # Convert coordinates if normalized (0-1)
-                                    if 0 <= x1 <= 1 and 0 <= y1 <= 1 and 0 <= x2 <= 1 and 0 <= y2 <= 1:
-                                        x1 *= width
-                                        y1 *= height
-                                        x2 *= width
-                                        y2 *= height
-                                        
-                                    # Convert to integers and validate
-                                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
-                                    x1 = max(0, min(width - 1, x1))
-                                    y1 = max(0, min(height - 1, y1))
-                                    x2 = max(0, min(width - 1, x2))
-                                    y2 = max(0, min(height - 1, y2))
-                                    
-                                    # Skip invalid boxes
-                                    if x2 <= x1 or y2 <= y1:
-                                        continue
-                                        
-                                    label = COCO_CLASSES.get(class_id, f"ClassID {class_id}")
-                                    detections.append({
-                                        'bbox': (x1, y1, x2, y2),
-                                        'score': score,
-                                        'category_id': class_id,
-                                        'label': label
-                                    })
+                    # Handle category_id which might be missing or named differently
+                    class_id = None
+                    if 'category_id' in detection:
+                        class_id = int(detection['category_id'])
+                    elif 'class_id' in detection:
+                        class_id = int(detection['class_id'])
+                    
+                    # If we don't have a class_id but have a label, we can proceed with a placeholder
+                    if class_id is None and 'label' in detection:
+                        # Use -1 as placeholder when only label is available
+                        class_id = -1
+                    
+                    # Skip if we couldn't determine a class ID and don't have a label
+                    if class_id is None and 'label' not in detection:
+                        if VERBOSE_OUTPUT:
+                            print(f"Skipping detection with no class_id or label: {detection}")
+                        continue
+                    
+                    # Debug the values
+                    if VERBOSE_OUTPUT:
+                        print(f"Extracted values - bbox: {bbox}, score: {score}, class_id: {class_id}")
+                        print(f"CLASSES_TO_DETECT: {CLASSES_TO_DETECT}, threshold: {DETECTION_THRESHOLD}")
+                    
+                    # Check if detection is using custom model labels or COCO classes
+                    # For custom models like yolov8n_cats, use whatever labels come back
+                    use_custom_model = class_id == -1 or not CLASSES_TO_DETECT
+                    should_detect = False
+                    
+                    if use_custom_model:
+                        # For custom models, accept all detections
+                        should_detect = score >= DETECTION_THRESHOLD
+                    else:
+                        # For COCO model, filter by class ID
+                        should_detect = class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD
+                    
+                    if should_detect:
+                        debug_print(f"Found valid detection with score {score:.2f}")
                         
-                        # Format 2b: Each row has objectness + class scores
-                        elif data.shape[1] > 5:  # [x_center, y_center, width, height, objectness, class_scores...]
-                            for box_data in data:
-                                objectness = box_data[4]
-                                
-                                if objectness >= DETECTION_THRESHOLD:
-                                    # Find max class score and its index
-                                    class_scores = box_data[5:]
-                                    class_id = np.argmax(class_scores)
-                                    score = float(class_scores[class_id])
-                                    
-                                    if class_id in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
-                                        # Convert center format to corner format
-                                        x_center, y_center, width, height = box_data[0:4]
-                                        
-                                        # Convert normalized coordinates if needed
-                                        if 0 <= x_center <= 1 and 0 <= y_center <= 1 and 0 <= width <= 1 and 0 <= height <= 1:
-                                            x_center *= width
-                                            y_center *= height
-                                            box_width = width * width
-                                            box_height = height * height
-                                        else:
-                                            box_width = width
-                                            box_height = height
-                                            
-                                        # Calculate corners
-                                        x1 = int(x_center - box_width / 2)
-                                        y1 = int(y_center - box_height / 2)
-                                        x2 = int(x_center + box_width / 2)
-                                        y2 = int(y_center + box_height / 2)
-                                        
-                                        # Validate coordinates
-                                        x1 = max(0, min(width - 1, x1))
-                                        y1 = max(0, min(height - 1, y1))
-                                        x2 = max(0, min(width - 1, x2))
-                                        y2 = max(0, min(height - 1, y2))
-                                        
-                                        # Skip invalid boxes
-                                        if x2 <= x1 or y2 <= y1:
-                                            continue
-                                            
-                                        label = COCO_CLASSES.get(class_id, f"ClassID {class_id}")
-                                        detections.append({
-                                            'bbox': (x1, y1, x2, y2),
-                                            'score': score,
-                                            'category_id': class_id,
-                                            'label': label
-                                        })
-        
-        # For any other object structures that might need handling 
-        else:
-            if isinstance(model_results, list):
-                # Direct list of detections
-                result_list = model_results
-                if VERBOSE_OUTPUT: print(f"Processing {len(result_list)} detections from direct results list")
-            else:
-                # Fallback or handle other structures if necessary
-                result_list = []
-                if VERBOSE_OUTPUT: 
-                    print(f"Warning: Unexpected model result type: {type(model_results)}")
-                    if hasattr(model_results, '__dict__'):
-                        print(f"Result attributes: {list(model_results.__dict__.keys())}")
-
+                        # Process bbox format - DeGirum might return them in different formats
+                        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                            # Standard format [x1, y1, x2, y2]
+                            x1, y1, x2, y2 = map(int, bbox)
+                        elif isinstance(bbox, dict) and all(k in bbox for k in ['left', 'top', 'right', 'bottom']):
+                            # Dictionary format with named coordinates
+                            x1, y1, x2, y2 = int(bbox['left']), int(bbox['top']), int(bbox['right']), int(bbox['bottom'])
+                        else:
+                            # Unknown format - log and skip
+                            debug_print(f"Unknown bbox format: {bbox}", force=True)
+                            continue
+                        
+                        # Validate coordinates
+                        x1 = max(0, min(width - 1, x1))
+                        y1 = max(0, min(height - 1, y1))
+                        x2 = max(0, min(width - 1, x2))
+                        y2 = max(0, min(height - 1, y2))
+                        
+                        # Skip invalid boxes
+                        if x2 <= x1 or y2 <= y1:
+                            debug_print(f"Invalid box dimensions: ({x1}, {y1}, {x2}, {y2})")
+                            continue
+                            
+                        # Get label (might be provided directly or we need to look it up)
+                        if 'label' in detection and detection['label']:
+                            label = detection['label']
+                        else:
+                            label = COCO_CLASSES.get(class_id, f"ClassID {class_id}")
+                        
+                        # Add to our detections list
+                        detections.append({
+                            'bbox': (x1, y1, x2, y2),
+                            'score': score,
+                            'category_id': class_id,
+                            'label': label
+                        })
+                        
+                        debug_print(f"Added detection: {label} ({score:.2f}) at [{x1},{y1},{x2},{y2}]")
+                else:
+                    # Process alternative formats...
+                    # Legacy or alternative format handling
+                    if VERBOSE_OUTPUT:
+                        print(f"Detection missing expected keys: {detection}")
+    
     except Exception as e:
         print(f"Error processing model results: {e}")
-        import traceback
         traceback.print_exc()
 
     if detections:
@@ -1184,11 +1174,11 @@ def preprocess_frame(frame, target_size=(640, 640)):
     else:
         resized = frame
     
-    # Make sure we're in the expected color format (BGR for OpenCV)
-    # The model might expect RGB, but the DeGirum library likely handles this conversion
+    # Convert from BGR to RGB since DeGirum models expect RGB input
+    rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
     
     # Create a copy to avoid any issues with buffer overwriting
-    processed = resized.copy()
+    processed = rgb_frame.copy()
     
     # Print shape for debugging
     if VERBOSE_OUTPUT:
@@ -1321,6 +1311,8 @@ def main():
                     print(f"Results type: {type(results)}")
                     if hasattr(results, 'results'):
                         print(f"Results contains {len(results.results)} items")
+                        if results.results and len(results.results) > 0:
+                            print(f"First detection: {results.results[0]}")
                         
                 # Process results into a standard format
                 detections = process_detections(preprocessed_frame, results)
@@ -1328,7 +1320,10 @@ def main():
                     print(f"Found {len(detections)} objects after processing")
                     for i, det in enumerate(detections):
                         print(f"  Detection {i+1}: {det['label']} ({det['score']:.2f}) at {det['bbox']}")
-
+            
+            except StopIteration:
+                print("Warning: No results returned from model prediction")
+                detections = []
             except Exception as e:
                 print(f"Error during inference or processing: {e}")
                 traceback.print_exc()  # Print the full stack trace for debugging
