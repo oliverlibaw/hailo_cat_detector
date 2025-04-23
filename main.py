@@ -145,8 +145,6 @@ model = None
 frame_num_global = 0 # Keep track of frames for periodic saving
 # New variable for controlling program execution
 running = True
-# Flag to run sample test
-run_sample_test = False
 
 # --- Terminal Input Functions ---
 
@@ -166,7 +164,6 @@ def print_help():
     print("\n--- Terminal Controls ---")
     print("q          - Quit the program")
     print("h          - Show this help message")
-    print("t          - Run the test_model_on_sample function")
     print("p          - Print current PD control settings")
     print("1/2        - Decrease/Increase PD_KP")
     print("3/4        - Decrease/Increase PD_KD")
@@ -178,7 +175,7 @@ def print_help():
 
 def input_thread_function():
     """Thread function to handle terminal input."""
-    global running, PD_KP, PD_KD, PD_CENTER_THRESHOLD, PD_MIN_PULSE, PD_MAX_PULSE, PD_MOVEMENT_COOLDOWN, run_sample_test
+    global running, PD_KP, PD_KD, PD_CENTER_THRESHOLD, PD_MIN_PULSE, PD_MAX_PULSE, PD_MOVEMENT_COOLDOWN
     
     print_help()
     
@@ -194,9 +191,6 @@ def input_thread_function():
                 print_help()
             elif key == 'p':
                 print_current_settings()
-            elif key == 't':
-                print("Running test_model_on_sample...")
-                run_sample_test = True
             elif key == '1':
                 PD_KP = max(0.1, PD_KP - 0.1)
                 print(f"Decreased PD_KP to {PD_KP:.2f}")
@@ -1176,9 +1170,48 @@ def test_degirum_setup():
 
 # --- Main Execution ---
 
+def find_model_zoo_path():
+    """
+    Locate the Degirum model zoo path.
+    Checks several common locations and returns the first valid path.
+    """
+    # Default path from configuration
+    paths_to_check = [
+        HAILO_ZOO_PATH,
+        # Alternative potential locations
+        "/home/pi/degirum_model_zoo",
+        "/opt/degirum/model_zoo",
+        "/home/pi5/degirum_model_zoo",  # Explicitly included
+        "./degirum_model_zoo",
+        os.path.expanduser("~/degirum_model_zoo")
+    ]
+    
+    for path in paths_to_check:
+        if os.path.exists(path):
+            print(f"Found model zoo at: {path}")
+            try:
+                # Check if it contains at least one model
+                model_count = 0
+                for item in os.listdir(path):
+                    item_path = os.path.join(path, item)
+                    if os.path.isdir(item_path):
+                        model_count += 1
+                
+                if model_count > 0:
+                    print(f"Model zoo contains {model_count} potential model directories")
+                    return path
+                else:
+                    print(f"Warning: Path {path} exists but contains no model directories")
+            except Exception as e:
+                print(f"Error accessing {path}: {e}")
+    
+    print("WARNING: Could not find a valid model zoo path")
+    print("Using default path despite issues, model loading will likely fail")
+    return HAILO_ZOO_PATH
+
 def main():
     global video_writer, camera, model, previous_error, last_detection_time
-    global program_start_time, frame_num_global, running, run_sample_test # Access global variables
+    global program_start_time, frame_num_global, running # Access global variables
 
     program_start_time = time.time() # Record script start time
 
@@ -1229,15 +1262,8 @@ def main():
     except Exception as e:
         print(f"Warning: Could not print model information: {e}")
 
-    # Always run the test model on a sample image
-    print("\nRunning test on sample image to verify model functionality...")
-    try:
-        test_model_on_sample(model)
-    except Exception as e:
-        print(f"WARNING: Model sample test failed: {e}")
-        print("Will attempt to continue anyway, but this may indicate the model isn't working correctly.")
-        traceback.print_exc()
-
+    # Skip sample image test - focus on live camera detection
+    
     try:
         camera = setup_camera()
     except Exception as e:
@@ -1265,11 +1291,6 @@ def main():
         loop_start = time.monotonic()
         frame_num_global += 1 # Increment global frame counter
 
-        # Check if we should run the sample test
-        if run_sample_test:
-            test_model_on_sample(model)
-            run_sample_test = False
-
         # --- Read Frame ---
         frame = read_frame(camera)
         if frame is None:
@@ -1282,14 +1303,23 @@ def main():
         run_inference = (frame_count % FRAME_SKIP == 0)
         if run_inference:
             try:
+                # Print basic camera frame info
+                if VERBOSE_OUTPUT and frame_count % 30 == 0:  # Print every 30 frames
+                    print(f"Camera frame: {frame.shape}, dtype: {frame.dtype}, min/max: {np.min(frame)}/{np.max(frame)}")
+                
                 # Preprocess frame for the model
                 preprocessed_frame = preprocess_frame(frame, MODEL_INPUT_SIZE)
                 
                 # Log information about the frame
-                if VERBOSE_OUTPUT:
+                if VERBOSE_OUTPUT and frame_count % 30 == 0:  # Print every 30 frames
                     print(f"Frame shape before inference: {preprocessed_frame.shape}")
                     print(f"Frame dtype: {preprocessed_frame.dtype}")
                     print(f"Frame min/max values: {np.min(preprocessed_frame)}/{np.max(preprocessed_frame)}")
+                    if DEBUG_MODE:
+                        # Save a debug frame to disk
+                        debug_filename = f"debug_frame_{frame_count}.jpg"
+                        cv2.imwrite(debug_filename, preprocessed_frame)
+                        print(f"Saved debug frame to {debug_filename}")
                 
                 # Perform inference using the loaded Degirum model
                 inference_start = time.time()
@@ -1473,41 +1503,3 @@ def ensure_sample_image(filename="sample_cat.jpg"):
     except Exception as e:
         print(f"Error creating sample image: {e}")
         return None
-
-def find_model_zoo_path():
-    """
-    Locate the Degirum model zoo path.
-    Checks several common locations and returns the first valid path.
-    """
-    # Default path from configuration
-    paths_to_check = [
-        HAILO_ZOO_PATH,
-        # Alternative potential locations
-        "/home/pi/degirum_model_zoo",
-        "/opt/degirum/model_zoo",
-        "./degirum_model_zoo",
-        os.path.expanduser("~/degirum_model_zoo"),
-    ]
-    
-    for path in paths_to_check:
-        if os.path.exists(path):
-            print(f"Found model zoo at: {path}")
-            try:
-                # Check if it contains at least one model
-                model_count = 0
-                for item in os.listdir(path):
-                    item_path = os.path.join(path, item)
-                    if os.path.isdir(item_path):
-                        model_count += 1
-                
-                if model_count > 0:
-                    print(f"Model zoo contains {model_count} potential model directories")
-                    return path
-                else:
-                    print(f"Warning: Path {path} exists but contains no model directories")
-            except Exception as e:
-                print(f"Error accessing {path}: {e}")
-    
-    print("WARNING: Could not find a valid model zoo path")
-    print("Using default path despite issues, model loading will likely fail")
-    return HAILO_ZOO_PATH
