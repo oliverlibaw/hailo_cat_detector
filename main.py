@@ -330,6 +330,7 @@ def setup_sound():
 
 def load_model(model_name, zoo_path):
     """Load the specified Degirum model for Hailo hardware acceleration."""
+    global MODEL_INPUT_SIZE
     try:
         print(f"Loading Degirum model: {model_name} from {zoo_path}")
 
@@ -411,7 +412,6 @@ def load_model(model_name, zoo_path):
                 if model_height != MODEL_INPUT_SIZE[1] or model_width != MODEL_INPUT_SIZE[0]:
                     print(f"WARNING: Model expects {model_width}x{model_height} but configuration is set to {MODEL_INPUT_SIZE[0]}x{MODEL_INPUT_SIZE[1]}")
                     print(f"Adjusting MODEL_INPUT_SIZE to match model requirements")
-                    global MODEL_INPUT_SIZE
                     MODEL_INPUT_SIZE = (model_width, model_height)
         
         return loaded_model
