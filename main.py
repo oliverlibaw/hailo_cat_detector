@@ -525,6 +525,12 @@ def activate_relay(pin, duration):
             off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
             action_prefix = f"MOVE {relay_name}"
 
+        # Log relay activation with detailed GPIO information
+        log_to_file(f"GPIO {pin} ({relay_name}) activated: duration={duration:.4f}s, " 
+                    f"on_state={'HIGH' if on_state == GPIO.HIGH else 'LOW'}, " 
+                    f"off_state={'HIGH' if off_state == GPIO.HIGH else 'LOW'}", 
+                    "relay_detail")
+        
         # Activate
         GPIO.output(pin, on_state)
         action_msg = f"{action_prefix} ON ({duration:.3f}s)"
@@ -544,11 +550,13 @@ def activate_relay(pin, duration):
 
     except Exception as e:
         print(f"Error activating relay {relay_name} (Pin {pin}): {e}")
+        log_to_file(f"ERROR: Failed to activate relay {relay_name} (Pin {pin}): {e}", "error")
         # Ensure relay is turned off in case of error during sleep
         try:
              GPIO.output(pin, off_state)
         except Exception as e_off:
              print(f"  Error ensuring relay off: {e_off}")
+             log_to_file(f"ERROR: Failed to turn off relay {relay_name} (Pin {pin}): {e_off}", "error")
 
 
 def process_detections(frame, model_results):
@@ -688,6 +696,27 @@ def process_detections(frame, model_results):
     return detections
 
 
+def log_to_file(message, log_type="centering"):
+    """Write a log message to the appropriate log file with timestamp."""
+    try:
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Use log_type to determine which log file to write to
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
+        log_file = os.path.join(log_dir, f"{log_type}_{timestamp}.log")
+        
+        # Create a timestamped message
+        time_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        log_entry = f"[{time_now}] {message}\n"
+        
+        # Append to the log file
+        with open(log_file, 'a') as f:
+            f.write(log_entry)
+            
+    except Exception as e:
+        print(f"Warning: Failed to write to log file: {e}")
+
 def handle_pd_control(bbox, frame_width):
     """
     Handles movement based on target position using a simpler zone-based approach 
@@ -701,6 +730,14 @@ def handle_pd_control(bbox, frame_width):
     x1, y1, x2, y2 = map(int, bbox)
     center_x = (x1 + x2) / 2
     current_time = time.time()
+    
+    # Calculate normalized center position (0-1) - for logging
+    normalized_center = center_x / frame_width
+    
+    # Create detailed log entry for object position
+    log_to_file(f"Object detected at: bbox={bbox}, center_x={center_x}, " 
+                f"normalized_pos={normalized_center:.4f}, frame_width={frame_width}", 
+                "object_position")
 
     # Update last detection time (used for inactivity reset)
     last_detection_time = current_time
@@ -708,6 +745,7 @@ def handle_pd_control(bbox, frame_width):
     # --- Squirt Logic (Independent of Centering) ---
     if current_time - last_squirt_activation >= RELAY_SQUIRT_COOLDOWN:
         print(f"Target detected! Activating squirt relay for {RELAY_SQUIRT_DURATION:.2f}s")
+        log_to_file(f"SQUIRT activated at object position {normalized_center:.4f}", "relay_activation")
         # Play sound effect if enabled and available
         if SOUND_ENABLED and SOUND_FILES:
              try:
@@ -748,6 +786,11 @@ def handle_pd_control(bbox, frame_width):
         # Fallback - should never happen
         current_zone = 'center'
     
+    # Log the current zone, error and derivative
+    log_to_file(f"PD state: zone={current_zone}, error={current_error:.4f}, derivative={error_derivative:.4f}, " 
+                f"center_threshold={PD_CENTER_THRESHOLD:.4f}, obj_pos={normalized_center:.4f}", 
+                "pd_control")
+    
     if VERBOSE_OUTPUT:
         print(f"Target in {current_zone} zone (error: {current_error:.3f}, derivative: {error_derivative:.3f})")
     
@@ -771,6 +814,12 @@ def handle_pd_control(bbox, frame_width):
             
             # Clamp to min/max values
             pulse_duration = max(PD_MIN_PULSE, min(pulse_duration, PD_MAX_PULSE))
+            
+            # Detailed log for relay activation
+            log_to_file(f"RELAY {relay_name} activated: action={action_desc}, zone={current_zone}, " 
+                        f"obj_pos={normalized_center:.4f}, error={current_error:.4f}, " 
+                        f"derivative={error_derivative:.4f}, pulse_duration={pulse_duration:.4f}, " 
+                        f"KP={PD_KP:.2f}, KD={PD_KD:.2f}", "relay_activation")
             
             # Activate the relay
             print(f"PD {action_desc} (Error: {current_error:.3f}, Derivative: {error_derivative:.3f}, Duration: {pulse_duration:.3f}s)")
