@@ -145,6 +145,10 @@ model = None
 frame_num_global = 0 # Keep track of frames for periodic saving
 # New variable for controlling program execution
 running = True
+# First, add position tracking variables to global state
+# Add these variables with the other global state variables
+last_position = None  # Store the last known position of object
+position_history = []  # Keep a history of recent positions for analysis
 
 # --- Terminal Input Functions ---
 
@@ -725,19 +729,40 @@ def handle_pd_control(bbox, frame_width):
     Returns the calculated error for visualization.
     """
     global previous_error, last_movement_time, last_action, last_action_time
-    global last_squirt_activation, last_detection_time
+    global last_squirt_activation, last_detection_time, last_position, position_history
 
     x1, y1, x2, y2 = map(int, bbox)
     center_x = (x1 + x2) / 2
     current_time = time.time()
     
-    # Calculate normalized center position (0-1) - for logging
+    # Calculate normalized center position (0-1)
     normalized_center = center_x / frame_width
     
-    # Create detailed log entry for object position
+    # Track position history
+    position_entry = {
+        'time': current_time,
+        'position': normalized_center,
+        'bbox': bbox
+    }
+    position_history.append(position_entry)
+    # Keep only recent history (last 20 positions)
+    if len(position_history) > 20:
+        position_history.pop(0)
+    
+    # Log position change since last detection
+    position_change = "N/A"
+    if last_position is not None:
+        position_change = normalized_center - last_position
+        log_to_file(f"Position change: from={last_position:.4f} to={normalized_center:.4f} "
+                   f"change={position_change:.4f}", "tracking")
+    
+    # Update last known position
+    last_position = normalized_center
+    
+    # More detailed object position log
     log_to_file(f"Object detected at: bbox={bbox}, center_x={center_x}, " 
-                f"normalized_pos={normalized_center:.4f}, frame_width={frame_width}", 
-                "object_position")
+                f"normalized_pos={normalized_center:.4f}, frame_width={frame_width}, "
+                f"position_change={position_change}", "object_position")
 
     # Update last detection time (used for inactivity reset)
     last_detection_time = current_time
@@ -764,6 +789,11 @@ def handle_pd_control(bbox, frame_width):
     
     # Calculate the derivative component for smoother transitions
     error_derivative = current_error - previous_error
+    
+    # Record previous error for logging before it's updated
+    prev_error_value = previous_error
+    
+    # Update previous error for next iteration
     previous_error = current_error
     
     # Define tracking zones
@@ -786,13 +816,25 @@ def handle_pd_control(bbox, frame_width):
         # Fallback - should never happen
         current_zone = 'center'
     
-    # Log the current zone, error and derivative
-    log_to_file(f"PD state: zone={current_zone}, error={current_error:.4f}, derivative={error_derivative:.4f}, " 
-                f"center_threshold={PD_CENTER_THRESHOLD:.4f}, obj_pos={normalized_center:.4f}", 
-                "pd_control")
+    # Enhanced debugging information
+    zone_edges = {
+        'left_edge': -PD_CENTER_THRESHOLD,
+        'right_edge': PD_CENTER_THRESHOLD,
+        'distance_from_left_edge': current_error - (-PD_CENTER_THRESHOLD),
+        'distance_from_right_edge': PD_CENTER_THRESHOLD - current_error,
+    }
+    
+    # Log the current zone, error and derivative with enhanced details
+    log_to_file(f"PD state: zone={current_zone}, error={current_error:.4f}, prev_error={prev_error_value:.4f}, "
+                f"derivative={error_derivative:.4f}, center_threshold={PD_CENTER_THRESHOLD:.4f}, "
+                f"obj_pos={normalized_center:.4f}, distance_from_center={(0.5-normalized_center):.4f}, "
+                f"zone_details={zone_edges}", "pd_control")
     
     if VERBOSE_OUTPUT:
         print(f"Target in {current_zone} zone (error: {current_error:.3f}, derivative: {error_derivative:.3f})")
+    
+    # Track position before relay activation for comparison
+    position_before_relay = normalized_center
     
     # Check if we need to move
     if current_zone != 'center' and (current_time - last_movement_time >= PD_MOVEMENT_COOLDOWN):
@@ -814,6 +856,13 @@ def handle_pd_control(bbox, frame_width):
             
             # Clamp to min/max values
             pulse_duration = max(PD_MIN_PULSE, min(pulse_duration, PD_MAX_PULSE))
+            
+            # Enhanced logging with position before relay activation
+            log_to_file(f"RELAY {relay_name} BEFORE: position={position_before_relay:.4f}, "
+                        f"zone={current_zone}, error={current_error:.4f}, "
+                        f"distance_from_center={(0.5-normalized_center):.4f}, "
+                        f"zone_distance={zone_edges['distance_from_left_edge'] if current_zone == 'left' else zone_edges['distance_from_right_edge']:.4f}", 
+                        "relay_detailed")
             
             # Detailed log for relay activation
             log_to_file(f"RELAY {relay_name} activated: action={action_desc}, zone={current_zone}, " 
@@ -1456,6 +1505,10 @@ def main():
 
         frame_count += 1
 
+        # --- Log System Status Periodically ---
+        if frame_count % 30 == 0:  # Log every 30 frames
+            log_system_status()
+
     # End of main loop
     print("Main loop exited.")
 
@@ -1473,3 +1526,25 @@ if __name__ == "__main__":
         # Ensure cleanup runs even if main crashes
         cleanup()
         print("Program terminated.")
+
+# Add a new function to periodically log system status even when no actions are taken
+def log_system_status():
+    """Log overall system status periodically, including internal state variables."""
+    try:
+        # Gather status information
+        current_time = time.time()
+        position_data = "None" if not position_history else f"{position_history[-1]['position']:.4f}"
+        last_action_ago = current_time - last_action_time if last_action_time > 0 else "N/A"
+        last_movement_ago = current_time - last_movement_time if last_movement_time > 0 else "N/A"
+        last_detection_ago = current_time - last_detection_time if last_detection_time > 0 else "N/A"
+        
+        # Log the status
+        log_to_file(f"SYSTEM STATUS: prev_error={previous_error:.4f}, last_position={position_data}, "
+                   f"last_action='{last_action}' ({last_action_ago:.2f}s ago), "
+                   f"last_movement={last_movement_ago:.2f}s ago, "
+                   f"last_detection={last_detection_ago:.2f}s ago, "
+                   f"PD_params=[KP={PD_KP:.2f}, KD={PD_KD:.2f}, "
+                   f"CENTER_TH={PD_CENTER_THRESHOLD:.4f}, MIN_PULSE={PD_MIN_PULSE:.4f}, "
+                   f"MAX_PULSE={PD_MAX_PULSE:.4f}]", "system_status")
+    except Exception as e:
+        print(f"Error logging system status: {e}")
