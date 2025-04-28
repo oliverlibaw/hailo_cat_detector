@@ -33,8 +33,8 @@ except ImportError:
 # GPIO Pin Setup (BCM Mode)
 RELAY_PINS = {
     'squirt': 5,  # Squirt relay (triggers water gun)
-    'left': 13,   # Left relay - controls LEFT movement
-    'right': 6,   # Right relay - controls RIGHT movement
+    'right': 13,  # Right relay - controls movement to the RIGHT (camera/gun turns right)
+    'left': 6,    # Left relay - controls movement to the LEFT (camera/gun turns left) 
     'unused': 15  # Unused relay
 }
 RELAY_ACTIVE_LOW = True # True if relay activates on LOW signal
@@ -1136,12 +1136,12 @@ def test_relays():
 
     # Test left movement relay (should turn platform RIGHT)
     print("Testing LEFT relay (turn platform RIGHT)...")
-    activate_relay(RELAY_PINS['right'], 0.3) # Remember right relay turns left
+    activate_relay(RELAY_PINS['left'], 0.3) # Remember left relay turns right
     time.sleep(0.5)
 
     # Test right movement relay (should turn platform LEFT)
     print("Testing RIGHT relay (turn platform LEFT)...")
-    activate_relay(RELAY_PINS['left'], 0.3) # Remember left relay turns right
+    activate_relay(RELAY_PINS['right'], 0.3) # Remember right relay turns left
     time.sleep(0.5)
 
     print("Relay test complete.\n")
