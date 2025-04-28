@@ -1284,6 +1284,27 @@ def preprocess_frame(frame, target_size=(640, 640)):
     
     return processed
 
+def log_system_status():
+    """Log overall system status periodically, including internal state variables."""
+    try:
+        # Gather status information
+        current_time = time.time()
+        position_data = "None" if not position_history else f"{position_history[-1]['position']:.4f}"
+        last_action_ago = current_time - last_action_time if last_action_time > 0 else "N/A"
+        last_movement_ago = current_time - last_movement_time if last_movement_time > 0 else "N/A"
+        last_detection_ago = current_time - last_detection_time if last_detection_time > 0 else "N/A"
+        
+        # Log the status
+        log_to_file(f"SYSTEM STATUS: prev_error={previous_error:.4f}, last_position={position_data}, "
+                   f"last_action='{last_action}' ({last_action_ago:.2f}s ago), "
+                   f"last_movement={last_movement_ago:.2f}s ago, "
+                   f"last_detection={last_detection_ago:.2f}s ago, "
+                   f"PD_params=[KP={PD_KP:.2f}, KD={PD_KD:.2f}, "
+                   f"CENTER_TH={PD_CENTER_THRESHOLD:.4f}, MIN_PULSE={PD_MIN_PULSE:.4f}, "
+                   f"MAX_PULSE={PD_MAX_PULSE:.4f}]", "system_status")
+    except Exception as e:
+        print(f"Error logging system status: {e}")
+
 def main():
     global video_writer, camera, model, previous_error, last_detection_time
     global program_start_time, frame_num_global, running # Access global variables
@@ -1526,25 +1547,3 @@ if __name__ == "__main__":
         # Ensure cleanup runs even if main crashes
         cleanup()
         print("Program terminated.")
-
-# Add a new function to periodically log system status even when no actions are taken
-def log_system_status():
-    """Log overall system status periodically, including internal state variables."""
-    try:
-        # Gather status information
-        current_time = time.time()
-        position_data = "None" if not position_history else f"{position_history[-1]['position']:.4f}"
-        last_action_ago = current_time - last_action_time if last_action_time > 0 else "N/A"
-        last_movement_ago = current_time - last_movement_time if last_movement_time > 0 else "N/A"
-        last_detection_ago = current_time - last_detection_time if last_detection_time > 0 else "N/A"
-        
-        # Log the status
-        log_to_file(f"SYSTEM STATUS: prev_error={previous_error:.4f}, last_position={position_data}, "
-                   f"last_action='{last_action}' ({last_action_ago:.2f}s ago), "
-                   f"last_movement={last_movement_ago:.2f}s ago, "
-                   f"last_detection={last_detection_ago:.2f}s ago, "
-                   f"PD_params=[KP={PD_KP:.2f}, KD={PD_KD:.2f}, "
-                   f"CENTER_TH={PD_CENTER_THRESHOLD:.4f}, MIN_PULSE={PD_MIN_PULSE:.4f}, "
-                   f"MAX_PULSE={PD_MAX_PULSE:.4f}]", "system_status")
-    except Exception as e:
-        print(f"Error logging system status: {e}")
