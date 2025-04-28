@@ -17,6 +17,9 @@ RELAY_PINS = {
     'PIN_15': 15
 }
 
+# Define the valid pin numbers to test
+VALID_PINS = [5, 6, 13, 15]
+
 # Define possible relay states
 RELAY_ACTIVE_LOW = True  # Set to match your relay module's behavior
 
@@ -33,11 +36,17 @@ def setup_gpio():
         GPIO.output(pin, off_state)
         
     print("GPIO Initialized")
+    return True
 
 def activate_relay(pin, duration, active_low=True):
     """
     Activate a specific relay for a given duration (in seconds).
     """
+    if pin not in VALID_PINS:
+        print(f"ERROR: Pin {pin} is not in the list of valid pins {VALID_PINS}")
+        print("Please choose one of the pins that was initialized")
+        return False
+        
     try:
         pin_name = "Unknown"
         for name, p in RELAY_PINS.items():
@@ -60,22 +69,28 @@ def activate_relay(pin, duration, active_low=True):
         # Deactivate relay
         GPIO.output(pin, off_state)
         print(f"Deactivated {pin_name} (PIN {pin})")
+        return True
         
     except Exception as e:
         print(f"Error activating relay on pin {pin}: {e}")
         # Ensure relay is turned off in case of error
         try:
             GPIO.output(pin, off_state)
-        except:
-            pass
+        except Exception as inner_error:
+            print(f"Additionally, could not reset pin state: {inner_error}")
+        return False
 
 def cleanup():
     """Clean up GPIO resources."""
     try:
         # Turn off all relays
         for pin in RELAY_PINS.values():
-            off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
-            GPIO.output(pin, off_state)
+            try:
+                off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+                GPIO.output(pin, off_state)
+            except:
+                # Individual pin might not be set up, continue to others
+                pass
             
         # Clean up GPIO resources
         GPIO.cleanup()
@@ -93,7 +108,10 @@ def interactive_test():
     print("2. Take notes on which pin moves the device in which direction")
     print("3. Update your main script with the correct pin assignments")
     
-    setup_gpio()
+    gpio_setup = setup_gpio()
+    if not gpio_setup:
+        print("ERROR: Failed to set up GPIO. Cannot continue.")
+        return
     
     try:
         while True:
@@ -122,35 +140,68 @@ def interactive_test():
                 activate_relay(15, 1.0, RELAY_ACTIVE_LOW)
             elif choice == '5':
                 # Test active high
-                duration = 1.0
-                pin = int(input("Which pin to test as active HIGH? "))
-                print(f"Testing PIN {pin} as active HIGH (ON=HIGH, OFF=LOW)")
-                GPIO.output(pin, GPIO.HIGH)
-                time.sleep(duration)
-                GPIO.output(pin, GPIO.LOW)
+                try:
+                    duration = 1.0
+                    pin_input = input("Which pin to test as active HIGH? (5, 6, 13, or 15): ")
+                    if not pin_input.isdigit() or int(pin_input) not in VALID_PINS:
+                        print(f"Invalid pin number. Please use one of: {VALID_PINS}")
+                        continue
+                        
+                    pin = int(pin_input)
+                    print(f"Testing PIN {pin} as active HIGH (ON=HIGH, OFF=LOW)")
+                    GPIO.output(pin, GPIO.HIGH)
+                    time.sleep(duration)
+                    GPIO.output(pin, GPIO.LOW)
+                except Exception as e:
+                    print(f"Error testing active HIGH: {e}")
             elif choice == '6':
                 # Test active low
-                duration = 1.0
-                pin = int(input("Which pin to test as active LOW? "))
-                print(f"Testing PIN {pin} as active LOW (ON=LOW, OFF=HIGH)")
-                GPIO.output(pin, GPIO.LOW)
-                time.sleep(duration)
-                GPIO.output(pin, GPIO.HIGH)
+                try:
+                    duration = 1.0
+                    pin_input = input("Which pin to test as active LOW? (5, 6, 13, or 15): ")
+                    if not pin_input.isdigit() or int(pin_input) not in VALID_PINS:
+                        print(f"Invalid pin number. Please use one of: {VALID_PINS}")
+                        continue
+                        
+                    pin = int(pin_input)
+                    print(f"Testing PIN {pin} as active LOW (ON=LOW, OFF=HIGH)")
+                    GPIO.output(pin, GPIO.LOW)
+                    time.sleep(duration)
+                    GPIO.output(pin, GPIO.HIGH)
+                except Exception as e:
+                    print(f"Error testing active LOW: {e}")
             elif choice == '7':
                 # Test rapid left-right sequence
-                left_pin = int(input("Enter pin for LEFT movement: "))
-                right_pin = int(input("Enter pin for RIGHT movement: "))
-                iterations = int(input("Number of iterations: "))
-                
-                print(f"Testing sequence: LEFT (PIN {left_pin}) then RIGHT (PIN {right_pin})")
-                for i in range(iterations):
-                    print(f"Iteration {i+1}/{iterations}")
-                    print("Moving LEFT...")
-                    activate_relay(left_pin, 0.5, RELAY_ACTIVE_LOW)
-                    time.sleep(0.5)
-                    print("Moving RIGHT...")
-                    activate_relay(right_pin, 0.5, RELAY_ACTIVE_LOW)
-                    time.sleep(0.5)
+                try:
+                    left_input = input("Enter pin for LEFT movement (5, 6, 13, or 15): ")
+                    if not left_input.isdigit() or int(left_input) not in VALID_PINS:
+                        print(f"Invalid pin number for LEFT. Please use one of: {VALID_PINS}")
+                        continue
+                        
+                    right_input = input("Enter pin for RIGHT movement (5, 6, 13, or 15): ")
+                    if not right_input.isdigit() or int(right_input) not in VALID_PINS:
+                        print(f"Invalid pin number for RIGHT. Please use one of: {VALID_PINS}")
+                        continue
+                    
+                    iterations_input = input("Number of iterations (default: 3): ")
+                    iterations = 3  # Default value
+                    if iterations_input.isdigit():
+                        iterations = int(iterations_input)
+                    
+                    left_pin = int(left_input)
+                    right_pin = int(right_input)
+                    
+                    print(f"Testing sequence: LEFT (PIN {left_pin}) then RIGHT (PIN {right_pin})")
+                    for i in range(iterations):
+                        print(f"Iteration {i+1}/{iterations}")
+                        print("Moving LEFT...")
+                        activate_relay(left_pin, 0.5, RELAY_ACTIVE_LOW)
+                        time.sleep(0.5)
+                        print("Moving RIGHT...")
+                        activate_relay(right_pin, 0.5, RELAY_ACTIVE_LOW)
+                        time.sleep(0.5)
+                except Exception as e:
+                    print(f"Error in sequence test: {e}")
             else:
                 print("Invalid option")
                 
@@ -161,7 +212,10 @@ def interactive_test():
 
 def automatic_test():
     """Run a predetermined sequence of relay activations."""
-    setup_gpio()
+    gpio_setup = setup_gpio()
+    if not gpio_setup:
+        print("ERROR: Failed to set up GPIO. Cannot continue.")
+        return
     
     try:
         print("\n=== Starting Automatic Relay Test Sequence ===")
@@ -219,6 +273,8 @@ def automatic_test():
         
     except KeyboardInterrupt:
         print("\nTest interrupted")
+    except Exception as e:
+        print(f"Error during automatic test: {e}")
     finally:
         cleanup()
 
@@ -227,12 +283,18 @@ def main():
     print("=== Relay Testing Tool ===")
     print("This tool helps diagnose which GPIO pins control which movement directions.")
     
-    if len(sys.argv) > 1 and sys.argv[1] == 'auto':
-        automatic_test()
-    else:
-        interactive_test()
+    # Show valid pins
+    print(f"Valid GPIO pins for testing: {VALID_PINS}")
     
-    print("\nTest completed. Don't forget to update your main script with the correct pin assignments.")
+    try:
+        if len(sys.argv) > 1 and sys.argv[1] == 'auto':
+            automatic_test()
+        else:
+            interactive_test()
+    
+        print("\nTest completed. Don't forget to update your main script with the correct pin assignments.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 if __name__ == "__main__":
     try:
@@ -240,4 +302,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        cleanup() 
+        try:
+            cleanup()
+        except:
+            print("Note: Failed to clean up GPIO resources properly.") 
