@@ -18,6 +18,17 @@ import degirum as dg
 import threading
 import select
 
+# Add import for relay configuration
+try:
+    from relay_config import RELAY_PINS, RELAY_ACTIVE_LOW, SQUIRT_RELAY_ON_STATE, SQUIRT_RELAY_OFF_STATE
+    from relay_config import PD_CENTER_THRESHOLD, PD_KP, PD_KD, PD_MIN_PULSE, PD_MAX_PULSE, PD_MOVEMENT_COOLDOWN
+    print("Loaded relay configuration from relay_config.py")
+except ImportError:
+    print("Using default relay configuration (relay_config.py not found)")
+    # Keep the existing configuration as fallback
+    # RELAY_PINS is already defined in the code
+    # Other parameters are also already defined
+
 # Print the version of OpenCV being used
 print(f"OpenCV version: {cv2.__version__}")
 try:
