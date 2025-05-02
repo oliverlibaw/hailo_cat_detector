@@ -236,7 +236,7 @@ def activate_relay(pin, duration):
 def handle_tracking(bbox, frame_width):
     """
     Handle object tracking with improved movement control.
-    Uses the middle third of the object for more stable centering.
+    Uses the middle half of the object for more stable centering.
     Returns the current error for visualization.
     """
     global previous_error, last_movement_time, last_action, last_action_time
@@ -245,17 +245,17 @@ def handle_tracking(bbox, frame_width):
     x1, y1, x2, y2 = map(int, bbox)
     current_time = time.time()
     
-    # Calculate object width and middle third
+    # Calculate object width and middle half
     object_width = x2 - x1
-    middle_third_width = object_width * MIDDLE_THIRD_FACTOR
-    middle_third_start = x1 + (object_width - middle_third_width) / 2
-    middle_third_end = middle_third_start + middle_third_width
+    middle_half_width = object_width * MIDDLE_THIRD_FACTOR
+    middle_half_start = x1 + (object_width - middle_half_width) / 2
+    middle_half_end = middle_half_start + middle_half_width
     
-    # Calculate center of middle third
-    middle_third_center = (middle_third_start + middle_third_end) / 2
+    # Calculate center of middle half
+    middle_half_center = (middle_half_start + middle_half_end) / 2
     
     # Calculate normalized center position (0-1)
-    normalized_center = middle_third_center / frame_width
+    normalized_center = middle_half_center / frame_width
     
     # Apply smoothing to position changes
     if last_position is not None:
@@ -277,7 +277,7 @@ def handle_tracking(bbox, frame_width):
     last_detection_time = current_time
 
     # Calculate normalized error (-1.0 to 1.0)
-    current_error = ((middle_third_center / frame_width) - 0.5) * 2
+    current_error = ((middle_half_center / frame_width) - 0.5) * 2
     
     # Calculate the derivative component for smoother transitions
     error_derivative = current_error - previous_error
@@ -312,8 +312,8 @@ def handle_tracking(bbox, frame_width):
             
             if relay_name:
                 # Calculate pulse duration using PD control with reduced gain
-                base_duration = PD_KP * abs(current_error) * 0.7  # Reduced gain
-                derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1)
+                base_duration = PD_KP * abs(current_error) * 0.4  # Further reduced gain for less aggressive movement
+                derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1) * 0.4  # Also reduce derivative gain
                 pulse_duration = base_duration + derivative_adjustment
                 
                 # Clamp to min/max values
