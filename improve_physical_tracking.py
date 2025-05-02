@@ -34,12 +34,12 @@ except ImportError:
         'unused': 15  # Unused relay
     }
     RELAY_ACTIVE_LOW = True
-    PD_CENTER_THRESHOLD = 0.10
-    PD_KP = 0.60
-    PD_KD = 0.10
+    PD_CENTER_THRESHOLD = 0.05
+    PD_KP = 0.30
+    PD_KD = 0.05
     PD_MIN_PULSE = 0.01
-    PD_MAX_PULSE = 0.15
-    PD_MOVEMENT_COOLDOWN = 0.2
+    PD_MAX_PULSE = 0.08
+    PD_MOVEMENT_COOLDOWN = 0.5
 
 # Camera Settings
 FRAME_WIDTH = 640
@@ -285,7 +285,7 @@ def handle_tracking(bbox, frame_width):
     # Update previous error
     previous_error = current_error
     
-    # Define tracking zones with wider center zone
+    # Define tracking zones with smaller center zone
     zones = {
         'left': {'range': (-1.0, -PD_CENTER_THRESHOLD), 'relay': 'right', 'action': 'MOVE RIGHT'},
         'center': {'range': (-PD_CENTER_THRESHOLD, PD_CENTER_THRESHOLD), 'relay': None, 'action': 'CENTER'},
@@ -312,8 +312,8 @@ def handle_tracking(bbox, frame_width):
             
             if relay_name:
                 # Calculate pulse duration using PD control with reduced gain
-                base_duration = PD_KP * abs(current_error) * 0.4  # Further reduced gain for less aggressive movement
-                derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1) * 0.4  # Also reduce derivative gain
+                base_duration = PD_KP * abs(current_error) * 0.3  # Further reduced gain for less aggressive movement
+                derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1) * 0.3  # Also reduce derivative gain
                 pulse_duration = base_duration + derivative_adjustment
                 
                 # Clamp to min/max values
