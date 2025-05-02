@@ -356,6 +356,21 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
         text = f"{label}: {score:.2f}"
         cv2.putText(display_frame, text, (x1, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 2)
+        
+        # Check if this detection would trigger squirt
+        if det['category_id'] in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+            # Calculate if object is in center zone
+            center_x_obj = (x1 + x2) / 2
+            normalized_center = center_x_obj / width
+            error = abs(normalized_center - 0.5)
+            
+            if error <= PD_CENTER_THRESHOLD:
+                # Draw "SQUIRT" text in red at the top of the frame
+                squirt_text = "SQUIRT"
+                text_size = cv2.getTextSize(squirt_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3)[0]
+                text_x = (width - text_size[0]) // 2
+                cv2.putText(display_frame, squirt_text, (text_x, 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, COLOR_RED, 3)
     
     # Draw error indicator
     if current_error is not None:
