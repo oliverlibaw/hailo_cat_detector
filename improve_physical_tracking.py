@@ -61,7 +61,9 @@ CLASSES_TO_DETECT = [15, 16]  # COCO class IDs for cats and dogs
 # Tracking Settings
 POSITION_RESET_TIME = 10.0  # Reset tracking if no detection for this long
 SMOOTHING_FACTOR = 0.3  # Factor for smoothing position changes (0.0 to 1.0)
-MIN_MOVEMENT_THRESHOLD = 0.02  # Minimum error to trigger movement
+MIN_MOVEMENT_THRESHOLD = 0.05  # Increased minimum error to trigger movement
+MOVEMENT_COOLDOWN = 0.5  # Increased cooldown between movements
+MIDDLE_THIRD_FACTOR = 0.33  # Use middle third of object for centering
 
 # Global State Variables
 last_action = "Initializing"
@@ -234,17 +236,26 @@ def activate_relay(pin, duration):
 def handle_tracking(bbox, frame_width):
     """
     Handle object tracking with improved movement control.
+    Uses the middle third of the object for more stable centering.
     Returns the current error for visualization.
     """
     global previous_error, last_movement_time, last_action, last_action_time
     global last_detection_time, last_position, position_history
 
     x1, y1, x2, y2 = map(int, bbox)
-    center_x = (x1 + x2) / 2
     current_time = time.time()
     
+    # Calculate object width and middle third
+    object_width = x2 - x1
+    middle_third_width = object_width * MIDDLE_THIRD_FACTOR
+    middle_third_start = x1 + (object_width - middle_third_width) / 2
+    middle_third_end = middle_third_start + middle_third_width
+    
+    # Calculate center of middle third
+    middle_third_center = (middle_third_start + middle_third_end) / 2
+    
     # Calculate normalized center position (0-1)
-    normalized_center = center_x / frame_width
+    normalized_center = middle_third_center / frame_width
     
     # Apply smoothing to position changes
     if last_position is not None:
@@ -266,7 +277,7 @@ def handle_tracking(bbox, frame_width):
     last_detection_time = current_time
 
     # Calculate normalized error (-1.0 to 1.0)
-    current_error = ((center_x / frame_width) - 0.5) * 2
+    current_error = ((middle_third_center / frame_width) - 0.5) * 2
     
     # Calculate the derivative component for smoother transitions
     error_derivative = current_error - previous_error
@@ -274,7 +285,7 @@ def handle_tracking(bbox, frame_width):
     # Update previous error
     previous_error = current_error
     
-    # Define tracking zones
+    # Define tracking zones with wider center zone
     zones = {
         'left': {'range': (-1.0, -PD_CENTER_THRESHOLD), 'relay': 'right', 'action': 'MOVE RIGHT'},
         'center': {'range': (-PD_CENTER_THRESHOLD, PD_CENTER_THRESHOLD), 'relay': None, 'action': 'CENTER'},
@@ -293,15 +304,15 @@ def handle_tracking(bbox, frame_width):
         current_zone = 'center'
     
     # Check if we need to move
-    if current_zone != 'center' and (current_time - last_movement_time >= PD_MOVEMENT_COOLDOWN):
+    if current_zone != 'center' and (current_time - last_movement_time >= MOVEMENT_COOLDOWN):
         # Only move if error is significant enough
         if abs(current_error) > MIN_MOVEMENT_THRESHOLD:
             relay_name = zones[current_zone]['relay']
             action_desc = zones[current_zone]['action']
             
             if relay_name:
-                # Calculate pulse duration using PD control
-                base_duration = PD_KP * abs(current_error)
+                # Calculate pulse duration using PD control with reduced gain
+                base_duration = PD_KP * abs(current_error) * 0.7  # Reduced gain
                 derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1)
                 pulse_duration = base_duration + derivative_adjustment
                 
