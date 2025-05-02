@@ -462,8 +462,23 @@ def main():
                 if hasattr(result, 'results'):
                     for det in result.results:
                         if det['score'] >= DETECTION_THRESHOLD and det['category_id'] in CLASSES_TO_DETECT:
+                            # Convert bbox to proper format (x1, y1, x2, y2)
+                            bbox = det['bbox']
+                            if isinstance(bbox, dict):
+                                # If bbox is in dict format (left, top, right, bottom)
+                                x1, y1, x2, y2 = bbox['left'], bbox['top'], bbox['right'], bbox['bottom']
+                            elif isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                                # If bbox is in list format [x1, y1, x2, y2]
+                                x1, y1, x2, y2 = bbox
+                            else:
+                                print(f"Warning: Unknown bbox format: {bbox}")
+                                continue
+                            
+                            # Ensure coordinates are integers
+                            x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                            
                             detections.append({
-                                'bbox': det['bbox'],
+                                'bbox': (x1, y1, x2, y2),
                                 'score': det['score'],
                                 'label': COCO_CLASSES.get(det['category_id'], f"Class {det['category_id']}")
                             })
