@@ -61,9 +61,9 @@ CLASSES_TO_DETECT = [15, 16]  # COCO class IDs for cats and dogs
 # Tracking Settings
 POSITION_RESET_TIME = 10.0  # Reset tracking if no detection for this long
 SMOOTHING_FACTOR = 0.3  # Factor for smoothing position changes (0.0 to 1.0)
-MIN_MOVEMENT_THRESHOLD = 0.05  # Increased minimum error to trigger movement
-MOVEMENT_COOLDOWN = 0.5  # Increased cooldown between movements
-MIDDLE_THIRD_FACTOR = 0.33  # Use middle third of object for centering
+MIN_MOVEMENT_THRESHOLD = 0.02  # Minimum error to trigger movement
+MOVEMENT_COOLDOWN = 0.5  # Cooldown between movements
+MIDDLE_THIRD_FACTOR = 0.5  # Use middle half of object for centering
 
 # Global State Variables
 last_action = "Initializing"
