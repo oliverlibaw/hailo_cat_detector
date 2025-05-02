@@ -401,7 +401,7 @@ def signal_handler(sig, frame):
 
 def main():
     """Main function for improved physical tracking."""
-    global running, camera, model
+    global running, camera, model, previous_error
     
     # Register signal handler
     signal.signal(signal.SIGINT, signal_handler)
@@ -417,15 +417,12 @@ def main():
         
         # Load model
         model_zoo_path = "/home/pi5/degirum_model_zoo"
-        primary_model_name = "yolov8s_coco--640x640_quant_hailort_hailo8l_1"
+        model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
         
-        # Try loading the primary model first
-        model = load_model(primary_model_name, model_zoo_path)
+        # Load the model
+        model = load_model(model_name, model_zoo_path)
         if model is None:
-            print("Primary model failed to load, trying fallbacks...")
-            model = load_fallback_model(model_zoo_path)
-        if model is None:
-            print("CRITICAL: Failed to load any model.")
+            print("CRITICAL: Failed to load model.")
             print("Will exit in 3 seconds...")
             time.sleep(3)
             return
