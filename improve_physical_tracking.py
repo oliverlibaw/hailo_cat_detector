@@ -161,6 +161,55 @@ def load_model(model_name, zoo_path):
         print(f"CRITICAL: Failed to load model: {e}")
         return None
 
+def load_fallback_model(zoo_path):
+    """Try loading alternative Hailo models if the primary fails."""
+    print("Attempting to load a fallback model...")
+    # Only include Hailo models - no CPU fallback as YOLO won't run efficiently on Pi CPU
+    fallback_models = [ # List potential Hailo accelerated models in your zoo
+        "yolov5s_coco--640x640_quant_hailort_hailo8l_1",
+        "yolov8n_coco--640x640_quant_hailort_hailo8l_1",
+        "yolov8s_coco--640x640_quant_hailort_hailo8l_1",
+    ]
+    
+    # List available models in the zoo for reference
+    try:
+        print("Available models in zoo:")
+        models_found = []
+        for item in os.listdir(zoo_path):
+            item_path = os.path.join(zoo_path, item)
+            if os.path.isdir(item_path):
+                # Only look for Hailo-compatible .hef files
+                hef_files = [f for f in os.listdir(item_path) if f.endswith('.hef')]
+                if hef_files:
+                    models_found.append(item)
+                    print(f" - {item} (contains {len(hef_files)} .hef files)")
+        
+        # Add any found models to our fallback list
+        for model_name in models_found:
+            if model_name not in fallback_models:
+                # Only add if it has hailo8l or similar in the name (indicating Hailo compatibility)
+                if "hailo" in model_name.lower():
+                    fallback_models.append(model_name)
+                    print(f"Added {model_name} to fallback list")
+    except Exception as e:
+        print(f"Could not enumerate models in zoo: {e}")
+        
+    # Try loading models from our expanded list
+    for model_name in fallback_models:
+        print(f"Trying fallback model: {model_name}")
+        model = load_model(model_name, zoo_path)
+        if model:
+            print(f"Successfully loaded fallback model: {model_name}")
+            return model
+    
+    print("ERROR: Could not load any fallback models.")
+    print("Check the following:")
+    print("1. Ensure Hailo drivers are installed and device is properly connected")
+    print("2. Verify DeGirum model zoo path is correct")
+    print("3. Check file permissions on the model zoo directory")
+    print("4. Try running with sudo if it's a permissions issue")
+    return None
+
 def activate_relay(pin, duration):
     """Activate a relay for a specified duration."""
     global last_action, last_action_time
@@ -368,11 +417,32 @@ def main():
         
         # Load model
         model_zoo_path = "/home/pi5/degirum_model_zoo"
-        model = load_model("yolov8s_coco--640x640_quant_hailort_hailo8l_1", model_zoo_path)
+        primary_model_name = "yolov8s_coco--640x640_quant_hailort_hailo8l_1"
+        
+        # Try loading the primary model first
+        model = load_model(primary_model_name, model_zoo_path)
         if model is None:
-            print("ERROR: Failed to load model. Exiting.")
+            print("Primary model failed to load, trying fallbacks...")
+            model = load_fallback_model(model_zoo_path)
+        if model is None:
+            print("CRITICAL: Failed to load any model.")
+            print("Will exit in 3 seconds...")
+            time.sleep(3)
             return
         
+        # Print model information
+        try:
+            if hasattr(model, 'model_name'):
+                print(f"Model name: {model.model_name}")
+            if hasattr(model, 'input_shape'):
+                print(f"Model input shape: {model.input_shape}")
+            if hasattr(model, 'output_names'):
+                print(f"Model output names: {model.output_names}")
+            print(f"Detection threshold: {DETECTION_THRESHOLD}")
+            print(f"Classes to detect: {CLASSES_TO_DETECT} ({[COCO_CLASSES.get(cls_id, f'Unknown {cls_id}') for cls_id in CLASSES_TO_DETECT]})")
+        except Exception as e:
+            print(f"Warning: Could not print model information: {e}")
+
         # Initialize FPS counter
         fps_counter = FPSCounter()
         last_fps_print_time = time.time()
