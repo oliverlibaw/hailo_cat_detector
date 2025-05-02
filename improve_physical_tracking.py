@@ -34,12 +34,12 @@ except ImportError:
         'unused': 15  # Unused relay
     }
     RELAY_ACTIVE_LOW = True
-    PD_CENTER_THRESHOLD = 0.05
-    PD_KP = 0.30
-    PD_KD = 0.05
+    PD_CENTER_THRESHOLD = 0.08
+    PD_KP = 0.15
+    PD_KD = 0.02
     PD_MIN_PULSE = 0.01
-    PD_MAX_PULSE = 0.08
-    PD_MOVEMENT_COOLDOWN = 0.5
+    PD_MAX_PULSE = 0.04
+    PD_MOVEMENT_COOLDOWN = 0.8
 
 # Camera Settings
 FRAME_WIDTH = 640
@@ -61,8 +61,8 @@ CLASSES_TO_DETECT = [15, 16]  # COCO class IDs for cats and dogs
 # Tracking Settings
 POSITION_RESET_TIME = 10.0  # Reset tracking if no detection for this long
 SMOOTHING_FACTOR = 0.3  # Factor for smoothing position changes (0.0 to 1.0)
-MIN_MOVEMENT_THRESHOLD = 0.02  # Minimum error to trigger movement
-MOVEMENT_COOLDOWN = 0.5  # Cooldown between movements
+MIN_MOVEMENT_THRESHOLD = 0.05  # Increased from 0.02 to require larger error before movement
+MOVEMENT_COOLDOWN = 0.8  # Increased from 0.5 to allow more time between movements
 MIDDLE_THIRD_FACTOR = 0.5  # Use middle half of object for centering
 
 # Global State Variables
@@ -257,9 +257,9 @@ def handle_tracking(bbox, frame_width):
     # Calculate normalized center position (0-1)
     normalized_center = middle_half_center / frame_width
     
-    # Apply smoothing to position changes
+    # Apply stronger smoothing to position changes
     if last_position is not None:
-        smoothed_position = last_position + SMOOTHING_FACTOR * (normalized_center - last_position)
+        smoothed_position = last_position + SMOOTHING_FACTOR * 0.5 * (normalized_center - last_position)  # Added 0.5 multiplier for stronger smoothing
         normalized_center = smoothed_position
     
     # Track position history
@@ -285,7 +285,7 @@ def handle_tracking(bbox, frame_width):
     # Update previous error
     previous_error = current_error
     
-    # Define tracking zones with smaller center zone
+    # Define tracking zones with larger center zone
     zones = {
         'left': {'range': (-1.0, -PD_CENTER_THRESHOLD), 'relay': 'right', 'action': 'MOVE RIGHT'},
         'center': {'range': (-PD_CENTER_THRESHOLD, PD_CENTER_THRESHOLD), 'relay': None, 'action': 'CENTER'},
@@ -311,18 +311,20 @@ def handle_tracking(bbox, frame_width):
             action_desc = zones[current_zone]['action']
             
             if relay_name:
-                # Calculate pulse duration using PD control with reduced gain
-                base_duration = PD_KP * abs(current_error) * 0.3  # Further reduced gain for less aggressive movement
-                derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1) * 0.3  # Also reduce derivative gain
+                # Calculate pulse duration using PD control with much reduced gain
+                base_duration = PD_KP * abs(current_error) * 0.2  # Further reduced gain for less aggressive movement
+                derivative_adjustment = PD_KD * error_derivative * (1 if current_error > 0 else -1) * 0.2  # Also reduce derivative gain
                 pulse_duration = base_duration + derivative_adjustment
                 
                 # Clamp to min/max values
                 pulse_duration = max(PD_MIN_PULSE, min(pulse_duration, PD_MAX_PULSE))
                 
-                # Activate the relay
-                print(f"PD {action_desc} (Error: {current_error:.3f}, Duration: {pulse_duration:.3f}s)")
-                activate_relay(RELAY_PINS[relay_name], pulse_duration)
-                last_movement_time = current_time
+                # Add additional safety check for very small movements
+                if pulse_duration > PD_MIN_PULSE:
+                    # Activate the relay
+                    print(f"PD {action_desc} (Error: {current_error:.3f}, Duration: {pulse_duration:.3f}s)")
+                    activate_relay(RELAY_PINS[relay_name], pulse_duration)
+                    last_movement_time = current_time
     
     return current_error
 
