@@ -358,7 +358,8 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 2)
         
         # Check if this detection would trigger squirt
-        if det['category_id'] in CLASSES_TO_DETECT and score >= DETECTION_THRESHOLD:
+        # First check if it's a cat or dog by looking at the label
+        if label.lower() in ['cat', 'dog'] and score >= DETECTION_THRESHOLD:
             # Calculate if object is in center zone
             center_x_obj = (x1 + x2) / 2
             normalized_center = center_x_obj / width
