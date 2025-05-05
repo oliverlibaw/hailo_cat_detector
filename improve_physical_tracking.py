@@ -56,7 +56,12 @@ CAMERA_SETTINGS = {
 # Detection Settings
 DETECTION_THRESHOLD = 0.30
 MODEL_INPUT_SIZE = (640, 640)
-CLASSES_TO_DETECT = [15, 16]  # COCO class IDs for cats and dogs
+CLASSES_TO_DETECT = [0]  # Only one class: squirrel
+
+# COCO class names
+COCO_CLASSES = {
+    0: 'squirrel'
+}
 
 # Tracking Settings
 POSITION_RESET_TIME = 10.0  # Reset tracking if no detection for this long
@@ -446,7 +451,7 @@ def main():
         
         # Load model
         model_zoo_path = "/home/pi5/degirum_model_zoo"
-        model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
+        model_name = "yolov8n_squirrel--640x640_quant_hailort_hailo8l_1"
         
         # Load the model
         model = load_model(model_name, model_zoo_path)
@@ -567,12 +572,6 @@ class FPSCounter:
             self._start = now
             self._count = 0
         return self._fps
-
-# COCO class names
-COCO_CLASSES = {
-    15: 'cat',
-    16: 'dog'
-}
 
 if __name__ == "__main__":
     main() 
