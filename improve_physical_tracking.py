@@ -173,9 +173,7 @@ def load_fallback_model(zoo_path):
     print("Attempting to load a fallback model...")
     # Only include Hailo models - no CPU fallback as YOLO won't run efficiently on Pi CPU
     fallback_models = [ # List potential Hailo accelerated models in your zoo
-        "yolov5s_coco--640x640_quant_hailort_hailo8l_1",
-        "yolov8n_coco--640x640_quant_hailort_hailo8l_1",
-        "yolov8s_coco--640x640_quant_hailort_hailo8l_1",
+        "yolov8n_squirrel--640x640_quant_hailort_hailo8l_1",
     ]
     
     # List available models in the zoo for reference
@@ -195,7 +193,7 @@ def load_fallback_model(zoo_path):
         for model_name in models_found:
             if model_name not in fallback_models:
                 # Only add if it has hailo8l or similar in the name (indicating Hailo compatibility)
-                if "hailo" in model_name.lower():
+                if "hailo" in model_name.lower() and "squirrel" in model_name.lower():
                     fallback_models.append(model_name)
                     print(f"Added {model_name} to fallback list")
     except Exception as e:
