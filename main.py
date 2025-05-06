@@ -93,8 +93,11 @@ def setup_gpio():
     """Initialize GPIO pins for relays."""
     try:
         # First cleanup any existing GPIO state
-        GPIO.cleanup()
-        time.sleep(0.1)  # Small delay to ensure cleanup is complete
+        try:
+            GPIO.cleanup()
+        except:
+            pass
+        time.sleep(0.5)  # Longer delay to ensure cleanup is complete
         
         # Set GPIO mode and disable warnings
         GPIO.setmode(GPIO.BCM)
@@ -103,6 +106,10 @@ def setup_gpio():
         # Initialize all relay pins as outputs with initial state
         for name, pin in RELAY_PINS.items():
             try:
+                # Try to read the pin first to check if it's available
+                GPIO.setup(pin, GPIO.IN)
+                time.sleep(0.1)
+                # If we can read the pin, set it as output
                 GPIO.setup(pin, GPIO.OUT)
                 # Set initial state
                 if name == 'squirt':
@@ -129,17 +136,38 @@ def setup_camera():
     """Setup PiCamera2 for capture."""
     print("Setting up Pi camera...")
     try:
+        # First try to cleanup any existing camera processes
+        try:
+            os.system("sudo pkill -f libcamera")
+            time.sleep(1.0)
+        except:
+            pass
+            
         picam2 = Picamera2()
         
-        camera_config = picam2.create_video_configuration(
-            main={
-                "size": (FRAME_WIDTH, FRAME_HEIGHT),
-                "format": "XBGR8888"
-            },
-            controls=CAMERA_SETTINGS
-        )
+        # Try to get the camera configuration
+        try:
+            camera_config = picam2.create_video_configuration(
+                main={
+                    "size": (FRAME_WIDTH, FRAME_HEIGHT),
+                    "format": "XBGR8888"
+                },
+                controls=CAMERA_SETTINGS
+            )
+        except Exception as e:
+            print(f"Warning: Failed to create camera configuration: {e}")
+            # Try with default configuration
+            camera_config = None
         
-        picam2.configure(camera_config)
+        # Configure the camera
+        try:
+            picam2.configure(camera_config)
+        except Exception as e:
+            print(f"Warning: Failed to configure camera with custom settings: {e}")
+            # Try with default configuration
+            picam2.configure()
+        
+        # Start the camera
         picam2.start()
         time.sleep(2.0)  # Allow camera to stabilize
         
@@ -406,18 +434,20 @@ def cleanup():
             print(f"Error stopping camera: {e}")
     
     # Turn off all relays only if GPIO is available
-    if gpio_available:
-        try:
-            for name, pin in RELAY_PINS.items():
+    try:
+        for name, pin in RELAY_PINS.items():
+            try:
                 if name == 'squirt':
                     GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
                 else:
                     off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
                     GPIO.output(pin, off_state)
-            GPIO.cleanup()
-            print("GPIO cleaned up.")
-        except Exception as e:
-            print(f"Error during GPIO cleanup: {e}")
+            except:
+                pass
+        GPIO.cleanup()
+        print("GPIO cleaned up.")
+    except Exception as e:
+        print(f"Error during GPIO cleanup: {e}")
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully."""
@@ -441,7 +471,20 @@ def main():
         if not gpio_initialized:
             print("Warning: Continuing without GPIO control")
         
-        camera = setup_camera()
+        # Try to setup camera multiple times if needed
+        max_camera_attempts = 3
+        for attempt in range(max_camera_attempts):
+            try:
+                camera = setup_camera()
+                break
+            except Exception as e:
+                print(f"Camera setup attempt {attempt + 1}/{max_camera_attempts} failed: {e}")
+                if attempt < max_camera_attempts - 1:
+                    print("Retrying in 2 seconds...")
+                    time.sleep(2.0)
+                else:
+                    print("Failed to setup camera after all attempts")
+                    return
         
         # Load model
         model_zoo_path = "/home/pi5/degirum_model_zoo"
