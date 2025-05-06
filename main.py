@@ -56,7 +56,7 @@ CAMERA_SETTINGS = {
 # Detection Settings
 DETECTION_THRESHOLD = 0.30
 MODEL_INPUT_SIZE = (640, 640)
-CLASSES_TO_DETECT = [15, 16]  # COCO class IDs for cats and dogs
+CLASSES_TO_DETECT = [0]  # Only one class: squirrel
 
 # Tracking Settings
 POSITION_RESET_TIME = 10.0  # Reset tracking if no detection for this long
@@ -405,7 +405,7 @@ def main():
     # Register signal handler
     signal.signal(signal.SIGINT, signal_handler)
     
-    print("\n=== Cat/Dog Detection and Squirting System ===")
+    print("\n=== Squirrel Detection and Squirting System ===")
     print("Press Ctrl+C to exit.")
     
     try:
@@ -415,7 +415,7 @@ def main():
         
         # Load model
         model_zoo_path = "/home/pi5/degirum_model_zoo"
-        model_name = "yolo11s_silu_coco--640x640_quant_hailort_hailo8l_1"
+        model_name = "yolov8n_squirrel--640x640_quant_hailort_hailo8l_1"
         
         # Load the model
         model = load_model(model_name, model_zoo_path)
@@ -434,7 +434,7 @@ def main():
             if hasattr(model, 'output_names'):
                 print(f"Model output names: {model.output_names}")
             print(f"Detection threshold: {DETECTION_THRESHOLD}")
-            print(f"Classes to detect: {CLASSES_TO_DETECT} (['cat', 'dog'])")
+            print(f"Classes to detect: {CLASSES_TO_DETECT} (['squirrel'])")
         except Exception as e:
             print(f"Warning: Could not print model information: {e}")
 
@@ -537,8 +537,7 @@ class FPSCounter:
 
 # COCO class names
 COCO_CLASSES = {
-    15: 'cat',
-    16: 'dog'
+    0: 'squirrel'
 }
 
 if __name__ == "__main__":
