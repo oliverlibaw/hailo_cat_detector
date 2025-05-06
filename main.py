@@ -91,32 +91,39 @@ COLOR_YELLOW = (0, 255, 255)
 
 def setup_gpio():
     """Initialize GPIO pins for relays."""
-    global gpio_available
     try:
+        # First cleanup any existing GPIO state
+        GPIO.cleanup()
+        time.sleep(0.1)  # Small delay to ensure cleanup is complete
+        
+        # Set GPIO mode and disable warnings
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
-
-        # Initialize all relay pins as outputs
-        for pin in RELAY_PINS.values():
-            GPIO.setup(pin, GPIO.OUT)
-
-        # Set all relays to OFF state
+        
+        # Initialize all relay pins as outputs with initial state
         for name, pin in RELAY_PINS.items():
-            if name == 'squirt':
-                GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
-            else:
-                off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
-                GPIO.output(pin, off_state)
+            try:
+                GPIO.setup(pin, GPIO.OUT)
+                # Set initial state
+                if name == 'squirt':
+                    GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
+                else:
+                    off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+                    GPIO.output(pin, off_state)
+                print(f"Initialized {name} relay on pin {pin}")
+            except Exception as e:
+                print(f"Warning: Failed to initialize {name} relay on pin {pin}: {e}")
+                continue
 
-        gpio_available = True
         print("GPIO Initialized.")
         print(f"Relay Pins: {RELAY_PINS}")
         print(f"Relays Active Low: {RELAY_ACTIVE_LOW}")
+        return True
 
     except Exception as e:
-        print(f"Warning: GPIO not available: {e}")
-        print("Running in simulation mode - no physical GPIO control")
-        gpio_available = False
+        print(f"Error initializing GPIO: {e}")
+        print("Attempting to continue without GPIO...")
+        return False
 
 def setup_camera():
     """Setup PiCamera2 for capture."""
@@ -194,14 +201,6 @@ def activate_relay(pin, duration):
     global last_action, last_action_time
     
     try:
-        if not gpio_available:
-            # In simulation mode, just print the action
-            relay_name = [name for name, p in RELAY_PINS.items() if p == pin][0]
-            print(f"[SIMULATION] {relay_name.upper()} ON ({duration:.3f}s)")
-            last_action = f"{relay_name.upper()} ON ({duration:.3f}s) [SIM]"
-            last_action_time = time.time()
-            return
-
         # Determine ON/OFF states
         if pin == RELAY_PINS['squirt']:
             on_state = SQUIRT_RELAY_ON_STATE
@@ -438,7 +437,10 @@ def main():
     
     try:
         # Initialize hardware
-        setup_gpio()
+        gpio_initialized = setup_gpio()
+        if not gpio_initialized:
+            print("Warning: Continuing without GPIO control")
+        
         camera = setup_camera()
         
         # Load model
