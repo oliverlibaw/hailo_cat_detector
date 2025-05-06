@@ -81,6 +81,7 @@ position_history = []
 running = True
 camera = None
 model = None
+gpio_available = False  # Flag to track if GPIO is available
 
 # Colors for visualization
 COLOR_WHITE = (255, 255, 255)
@@ -90,6 +91,7 @@ COLOR_YELLOW = (0, 255, 255)
 
 def setup_gpio():
     """Initialize GPIO pins for relays."""
+    global gpio_available
     try:
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
@@ -106,13 +108,15 @@ def setup_gpio():
                 off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
                 GPIO.output(pin, off_state)
 
+        gpio_available = True
         print("GPIO Initialized.")
         print(f"Relay Pins: {RELAY_PINS}")
         print(f"Relays Active Low: {RELAY_ACTIVE_LOW}")
 
     except Exception as e:
-        print(f"CRITICAL: Error initializing GPIO: {e}")
-        raise
+        print(f"Warning: GPIO not available: {e}")
+        print("Running in simulation mode - no physical GPIO control")
+        gpio_available = False
 
 def setup_camera():
     """Setup PiCamera2 for capture."""
@@ -190,6 +194,14 @@ def activate_relay(pin, duration):
     global last_action, last_action_time
     
     try:
+        if not gpio_available:
+            # In simulation mode, just print the action
+            relay_name = [name for name, p in RELAY_PINS.items() if p == pin][0]
+            print(f"[SIMULATION] {relay_name.upper()} ON ({duration:.3f}s)")
+            last_action = f"{relay_name.upper()} ON ({duration:.3f}s) [SIM]"
+            last_action_time = time.time()
+            return
+
         # Determine ON/OFF states
         if pin == RELAY_PINS['squirt']:
             on_state = SQUIRT_RELAY_ON_STATE
@@ -394,18 +406,19 @@ def cleanup():
         except Exception as e:
             print(f"Error stopping camera: {e}")
     
-    # Turn off all relays
-    try:
-        for name, pin in RELAY_PINS.items():
-            if name == 'squirt':
-                GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
-            else:
-                off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
-                GPIO.output(pin, off_state)
-        GPIO.cleanup()
-        print("GPIO cleaned up.")
-    except Exception as e:
-        print(f"Error during GPIO cleanup: {e}")
+    # Turn off all relays only if GPIO is available
+    if gpio_available:
+        try:
+            for name, pin in RELAY_PINS.items():
+                if name == 'squirt':
+                    GPIO.output(pin, SQUIRT_RELAY_OFF_STATE)
+                else:
+                    off_state = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
+                    GPIO.output(pin, off_state)
+            GPIO.cleanup()
+            print("GPIO cleaned up.")
+        except Exception as e:
+            print(f"Error during GPIO cleanup: {e}")
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully."""
