@@ -47,10 +47,10 @@ FRAME_HEIGHT = 640
 TARGET_FPS = 30
 CAMERA_SETTINGS = {
     "AeEnable": True, "AwbEnable": True, "AeExposureMode": 0,
-    "AeMeteringMode": 0, "ExposureTime": 0, "AnalogueGain": 1.0,
-    "Brightness": 0.2, "Contrast": 1.1, "Saturation": 1.1,
+    "AeMeteringMode": 0, "ExposureTime": 0, "AnalogueGain": 0.8,  # Reduced gain
+    "Brightness": 0.0, "Contrast": 1.0, "Saturation": 1.0,  # Reset to defaults
     "FrameRate": TARGET_FPS, "AeConstraintMode": 0, "AwbMode": 1,
-    "ExposureValue": 0.5, "NoiseReductionMode": 2
+    "ExposureValue": 0.0, "NoiseReductionMode": 2
 }
 
 # Video Recording Settings
@@ -377,12 +377,29 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
         score = det['score']
         label = det['label']
         
+        # Ensure coordinates are within frame bounds
+        x1 = max(0, min(x1, width - 1))
+        y1 = max(0, min(y1, height - 1))
+        x2 = max(0, min(x2, width - 1))
+        y2 = max(0, min(y2, height - 1))
+        
         # Draw bounding box
         cv2.rectangle(display_frame, (x1, y1), (x2, y2), COLOR_GREEN, 2)
         
         # Draw label with confidence
         text = f"{label}: {score:.2f}"
-        cv2.putText(display_frame, text, (x1, y1 - 5),
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        text_x = x1
+        text_y = y1 - 5 if y1 > 20 else y1 + 20  # Adjust text position if too close to top
+        
+        # Draw text background
+        cv2.rectangle(display_frame, 
+                     (text_x, text_y - text_size[1] - 5),
+                     (text_x + text_size[0], text_y + 5),
+                     COLOR_GREEN, -1)
+        
+        # Draw text
+        cv2.putText(display_frame, text, (text_x, text_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 2)
         
         # Check if this detection would trigger squirt
@@ -492,6 +509,8 @@ def main():
         for attempt in range(max_camera_attempts):
             try:
                 camera = setup_camera()
+                # Wait for camera to stabilize
+                time.sleep(2.0)
                 break
             except Exception as e:
                 print(f"Camera setup attempt {attempt + 1}/{max_camera_attempts} failed: {e}")
