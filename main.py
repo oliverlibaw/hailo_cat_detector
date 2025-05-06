@@ -156,15 +156,30 @@ def load_model(model_name, zoo_path):
             print(f"ERROR: Model zoo path not found: {zoo_path}")
             return None
 
-        loaded_model = dg.load_model(
-            model_name=model_name,
-            inference_host_address="@local",
-            zoo_url=zoo_path,
-            output_confidence_threshold=DETECTION_THRESHOLD
-        )
+        # Add retry logic for model loading
+        max_retries = 3
+        retry_delay = 2.0  # seconds
         
-        print(f"Model '{model_name}' loaded successfully.")
-        return loaded_model
+        for attempt in range(max_retries):
+            try:
+                loaded_model = dg.load_model(
+                    model_name=model_name,
+                    inference_host_address="@local",
+                    zoo_url=zoo_path,
+                    output_confidence_threshold=DETECTION_THRESHOLD
+                )
+                
+                print(f"Model '{model_name}' loaded successfully.")
+                return loaded_model
+                
+            except Exception as e:
+                print(f"Attempt {attempt + 1}/{max_retries} failed to load model: {e}")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    print("All retry attempts failed.")
+                    return None
 
     except Exception as e:
         print(f"CRITICAL: Failed to load model: {e}")
@@ -399,7 +414,7 @@ def signal_handler(sig, frame):
     running = False
 
 def main():
-    """Main function for cat/dog detection and squirting."""
+    """Main function for squirrel detection and squirting."""
     global running, camera, model, previous_error
     
     # Register signal handler
@@ -434,7 +449,7 @@ def main():
             if hasattr(model, 'output_names'):
                 print(f"Model output names: {model.output_names}")
             print(f"Detection threshold: {DETECTION_THRESHOLD}")
-            print(f"Classes to detect: {CLASSES_TO_DETECT} (['squirrel'])")
+            print(f"Classes to detect: {CLASSES_TO_DETECT} ({[COCO_CLASSES.get(cls_id, f'Unknown {cls_id}') for cls_id in CLASSES_TO_DETECT]})")
         except Exception as e:
             print(f"Warning: Could not print model information: {e}")
 
@@ -443,71 +458,92 @@ def main():
         last_fps_print_time = time.time()
         
         while running:
-            # Read frame
-            frame = camera.capture_array()
-            if frame.shape[2] == 4:  # Convert XBGR to BGR
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-            
-            # Run inference
-            detections = []
             try:
-                # Preprocess frame
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = model.predict_batch([rgb_frame])
-                result = next(results)
+                # Read frame
+                frame = camera.capture_array()
+                if frame.shape[2] == 4:  # Convert XBGR to BGR
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
                 
-                # Process detections
-                if hasattr(result, 'results'):
-                    for det in result.results:
-                        if det['score'] >= DETECTION_THRESHOLD:
-                            # Convert bbox to proper format (x1, y1, x2, y2)
-                            bbox = det['bbox']
-                            if isinstance(bbox, dict):
-                                x1, y1, x2, y2 = bbox['left'], bbox['top'], bbox['right'], bbox['bottom']
-                            elif isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                                x1, y1, x2, y2 = bbox
-                            else:
-                                print(f"Warning: Unknown bbox format: {bbox}")
-                                continue
-                            
-                            # Ensure coordinates are integers
-                            x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
-                            
-                            detections.append({
-                                'bbox': (x1, y1, x2, y2),
-                                'score': det['score'],
-                                'label': COCO_CLASSES.get(det['category_id'], f"Class {det['category_id']}")
-                            })
+                # Run inference
+                detections = []
+                try:
+                    # Preprocess frame
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = model.predict_batch([rgb_frame])
+                    result = next(results)
+                    
+                    # Process detections
+                    if hasattr(result, 'results'):
+                        for det in result.results:
+                            if det['score'] >= DETECTION_THRESHOLD and det['category_id'] in CLASSES_TO_DETECT:
+                                # Convert bbox to proper format (x1, y1, x2, y2)
+                                bbox = det['bbox']
+                                if isinstance(bbox, dict):
+                                    x1, y1, x2, y2 = bbox['left'], bbox['top'], bbox['right'], bbox['bottom']
+                                elif isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                                    x1, y1, x2, y2 = bbox
+                                else:
+                                    print(f"Warning: Unknown bbox format: {bbox}")
+                                    continue
+                                
+                                # Ensure coordinates are integers
+                                x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                                
+                                detections.append({
+                                    'bbox': (x1, y1, x2, y2),
+                                    'score': det['score'],
+                                    'label': COCO_CLASSES.get(det['category_id'], f"Class {det['category_id']}")
+                                })
+                except Exception as e:
+                    print(f"Error during inference: {e}")
+                    # If we get a Hailo device error, try to reload the model
+                    if "HAILO_RPC_FAILED" in str(e):
+                        print("Hailo device error detected. Attempting to reload model...")
+                        model = load_model(model_name, model_zoo_path)
+                        if model is None:
+                            print("Failed to reload model. Exiting...")
+                            running = False
+                            break
+                        continue
+                
+                # Handle tracking
+                current_error = None
+                if detections:
+                    # Use highest confidence detection
+                    target_detection = max(detections, key=lambda d: d['score'])
+                    current_error = handle_tracking(target_detection['bbox'], FRAME_WIDTH)
+                else:
+                    # Reset tracking if no detection for a while
+                    if time.time() - last_detection_time > POSITION_RESET_TIME:
+                        if previous_error != 0.0:
+                            print(f"Resetting tracking due to inactivity ({POSITION_RESET_TIME}s)")
+                            previous_error = 0.0
+                
+                # Update FPS
+                fps_counter.update()
+                current_fps = fps_counter.get_fps()
+                if time.time() - last_fps_print_time >= 5.0:
+                    print(f"FPS: {current_fps:.1f}")
+                    last_fps_print_time = time.time()
+                
+                # Draw visualization
+                display_frame = draw_frame_elements(frame, current_fps, detections, current_error)
+                
+                # Show frame
+                cv2.imshow("Tracking", display_frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    running = False
+                    
             except Exception as e:
-                print(f"Error during inference: {e}")
-            
-            # Handle tracking
-            current_error = None
-            if detections:
-                # Use highest confidence detection
-                target_detection = max(detections, key=lambda d: d['score'])
-                current_error = handle_tracking(target_detection['bbox'], FRAME_WIDTH)
-            else:
-                # Reset tracking if no detection for a while
-                if time.time() - last_detection_time > POSITION_RESET_TIME:
-                    if previous_error != 0.0:
-                        print(f"Resetting tracking due to inactivity ({POSITION_RESET_TIME}s)")
-                        previous_error = 0.0
-            
-            # Update FPS
-            fps_counter.update()
-            current_fps = fps_counter.get_fps()
-            if time.time() - last_fps_print_time >= 5.0:
-                print(f"FPS: {current_fps:.1f}")
-                last_fps_print_time = time.time()
-            
-            # Draw visualization
-            display_frame = draw_frame_elements(frame, current_fps, detections, current_error)
-            
-            # Show frame
-            cv2.imshow("Tracking", display_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                running = False
+                print(f"Error in main loop: {e}")
+                if "HAILO_RPC_FAILED" in str(e):
+                    print("Hailo device error detected. Attempting to reload model...")
+                    model = load_model(model_name, model_zoo_path)
+                    if model is None:
+                        print("Failed to reload model. Exiting...")
+                        running = False
+                        break
+                time.sleep(1.0)  # Add delay before retrying
             
     except Exception as e:
         print(f"\nError in main loop: {e}")
