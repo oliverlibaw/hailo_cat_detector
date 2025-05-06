@@ -47,11 +47,16 @@ FRAME_HEIGHT = 640
 TARGET_FPS = 30
 CAMERA_SETTINGS = {
     "AeEnable": True, "AwbEnable": True, "AeExposureMode": 0,
-    "AeMeteringMode": 0, "ExposureTime": 0, "AnalogueGain": 1.5,
+    "AeMeteringMode": 0, "ExposureTime": 0, "AnalogueGain": 1.0,
     "Brightness": 0.2, "Contrast": 1.1, "Saturation": 1.1,
     "FrameRate": TARGET_FPS, "AeConstraintMode": 0, "AwbMode": 1,
     "ExposureValue": 0.5, "NoiseReductionMode": 2
 }
+
+# Video Recording Settings
+RECORD_DURATION = 60  # seconds
+RECORD_FPS = 30
+RECORD_FILENAME = "squirrel_detection_test.mp4"
 
 # Detection Settings
 DETECTION_THRESHOLD = 0.30
@@ -375,13 +380,13 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
         # Draw bounding box
         cv2.rectangle(display_frame, (x1, y1), (x2, y2), COLOR_GREEN, 2)
         
-        # Draw label
+        # Draw label with confidence
         text = f"{label}: {score:.2f}"
         cv2.putText(display_frame, text, (x1, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 2)
         
         # Check if this detection would trigger squirt
-        if label.lower() in ['cat', 'dog'] and score >= DETECTION_THRESHOLD:
+        if label.lower() == 'squirrel' and score >= DETECTION_THRESHOLD:
             # Calculate if object is in center zone
             center_x_obj = (x1 + x2) / 2
             normalized_center = center_x_obj / width
@@ -389,7 +394,7 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
             
             if error <= PD_CENTER_THRESHOLD:
                 # Draw "SQUIRT" text in red at the top of the frame
-                squirt_text = "SQUIRT"
+                squirt_text = "SQUIRT!"
                 text_size = cv2.getTextSize(squirt_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3)[0]
                 text_x = (width - text_size[0]) // 2
                 cv2.putText(display_frame, squirt_text, (text_x, 50),
@@ -401,10 +406,21 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
         cv2.circle(display_frame, (marker_pos_x, height - 40), 8, COLOR_RED, -1)
         cv2.line(display_frame, (marker_pos_x, height-40), (marker_pos_x, height-20), COLOR_RED, 2)
         
-        # Display error value
+        # Display error value and movement status
         error_text = f"Error: {current_error:.3f}"
         cv2.putText(display_frame, error_text, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_WHITE, 2)
+        
+        # Show movement status
+        if abs(current_error) > PD_CENTER_THRESHOLD:
+            if current_error > 0:
+                move_text = "MOVE LEFT"
+                text_color = COLOR_RED
+            else:
+                move_text = "MOVE RIGHT"
+                text_color = COLOR_RED
+            cv2.putText(display_frame, move_text, (width - 150, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
     
     # Draw FPS
     fps_text = f"FPS: {fps:.1f}"
@@ -515,8 +531,21 @@ def main():
         fps_counter = FPSCounter()
         last_fps_print_time = time.time()
         
+        # Initialize video recording
+        print(f"Starting video recording for {RECORD_DURATION} seconds...")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_writer = cv2.VideoWriter(RECORD_FILENAME, fourcc, RECORD_FPS, (FRAME_WIDTH, FRAME_HEIGHT))
+        recording_start_time = time.time()
+        
         while running:
             try:
+                # Check if recording duration has elapsed
+                if time.time() - recording_start_time >= RECORD_DURATION:
+                    print(f"Recording complete: {RECORD_FILENAME}")
+                    video_writer.release()
+                    running = False
+                    break
+                
                 # Read frame
                 frame = camera.capture_array()
                 if frame.shape[2] == 4:  # Convert XBGR to BGR
@@ -587,6 +616,9 @@ def main():
                 # Draw visualization
                 display_frame = draw_frame_elements(frame, current_fps, detections, current_error)
                 
+                # Write frame to video
+                video_writer.write(display_frame)
+                
                 # Show frame
                 cv2.imshow("Tracking", display_frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -608,6 +640,8 @@ def main():
         traceback.print_exc()
     finally:
         cleanup()
+        if 'video_writer' in locals():
+            video_writer.release()
         cv2.destroyAllWindows()
 
 class FPSCounter:
