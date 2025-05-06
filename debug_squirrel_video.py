@@ -2,8 +2,8 @@
 """
 debug_squirrel_video.py
 Debug script to test squirrel detection model on a video file using Degirum.
-Applies letterboxing for preprocessing and scales bounding boxes back to the
-original frame for accurate visualization.
+Uses Degirum's built-in preprocessing (no manual letterboxing).
+Draws bounding boxes and saves output video for model evaluation.
 """
 
 import os
@@ -22,54 +22,6 @@ OUTPUT_VIDEO_PATH = "debug_squirrel_output.mp4"
 # Squirrel class ID (should match your model)
 SQUIRREL_CLASS_ID = 0
 COCO_CLASSES = {0: "squirrel"}
-
-# Letterbox utility
-
-def resize_with_letterbox(image, target_shape, padding_value=(0, 0, 0)):
-    """
-    Resizes an image with letterboxing to fit the target size, preserving aspect ratio.
-    Returns the letterboxed image, scale, pad_top, pad_left.
-    """
-    h, w, c = image.shape
-    target_height, target_width = target_shape[1], target_shape[2]
-    scale_x = target_width / w
-    scale_y = target_height / h
-    scale = min(scale_x, scale_y)
-    new_w = int(w * scale)
-    new_h = int(h * scale)
-    resized_image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-    letterboxed_image = np.full((target_height, target_width, c), padding_value, dtype=np.uint8)
-    pad_top = (target_height - new_h) // 2
-    pad_left = (target_width - new_w) // 2
-    letterboxed_image[pad_top:pad_top+new_h, pad_left:pad_left+new_w] = resized_image
-    final_image = np.expand_dims(letterboxed_image, axis=0)
-    return final_image, scale, pad_top, pad_left
-
-def reverse_rescale_bboxes(annotations, scale, pad_top, pad_left, original_shape):
-    """
-    Reverse rescales bounding boxes from the letterbox image to the original image.
-    """
-    orig_h, orig_w = original_shape
-    rescaled_annotations = []
-    for ann in annotations:
-        bbox = ann['bbox']
-        x1, y1, x2, y2 = bbox
-        x1 -= pad_left
-        y1 -= pad_top
-        x2 -= pad_left
-        y2 -= pad_top
-        x1 /= scale
-        y1 /= scale
-        x2 /= scale
-        y2 /= scale
-        x1 = max(0, min(x1, orig_w))
-        y1 = max(0, min(y1, orig_h))
-        x2 = max(0, min(x2, orig_w))
-        y2 = max(0, min(y2, orig_h))
-        new_ann = ann.copy()
-        new_ann['bbox'] = (int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2)))
-        rescaled_annotations.append(new_ann)
-    return rescaled_annotations
 
 def draw_detections(frame, detections):
     for det in detections:
@@ -110,10 +62,10 @@ def main():
         if not ret:
             break
         frame_count += 1
-        # Letterbox preprocess
-        image_array, scale, pad_top, pad_left = resize_with_letterbox(frame, (1, 640, 640, 3))
-        # Run inference
-        result = model(image_array)
+        # Convert BGR to RGB for Degirum
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Run inference (Degirum handles resizing/letterboxing internally)
+        result = model(rgb_frame)
         detections = []
         if hasattr(result, 'results'):
             for det in result.results:
@@ -125,13 +77,16 @@ def main():
                         x1, y1, x2, y2 = bbox
                     else:
                         continue
+                    # Ensure coordinates are integers and within frame
+                    x1 = max(0, min(int(round(x1)), width - 1))
+                    y1 = max(0, min(int(round(y1)), height - 1))
+                    x2 = max(0, min(int(round(x2)), width - 1))
+                    y2 = max(0, min(int(round(y2)), height - 1))
                     detections.append({
                         'bbox': (x1, y1, x2, y2),
                         'score': det['score'],
                         'label': COCO_CLASSES.get(det['category_id'], f"Class {det['category_id']}")
                     })
-        # Reverse letterbox
-        detections = reverse_rescale_bboxes(detections, scale, pad_top, pad_left, (height, width))
         total_detections += len(detections)
         # Draw detections
         frame = draw_detections(frame, detections)
