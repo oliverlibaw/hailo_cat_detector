@@ -42,15 +42,24 @@ except ImportError:
     PD_MOVEMENT_COOLDOWN = 0.8
 
 # Camera Settings
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 640
+FRAME_WIDTH = 1280  # Use higher resolution for better accuracy
+FRAME_HEIGHT = 800  # Adjusted for 16:10 or 16:9 aspect ratio
 TARGET_FPS = 30
 CAMERA_SETTINGS = {
-    "AeEnable": True, "AwbEnable": True, "AeExposureMode": 0,
-    "AeMeteringMode": 0, "ExposureTime": 0, "AnalogueGain": 0.8,  # Reduced gain
-    "Brightness": 0.0, "Contrast": 1.0, "Saturation": 1.0,  # Reset to defaults
-    "FrameRate": TARGET_FPS, "AeConstraintMode": 0, "AwbMode": 1,
-    "ExposureValue": 0.0, "NoiseReductionMode": 2
+    "AeEnable": True,  # Auto exposure
+    "AwbEnable": True,  # Auto white balance
+    "AeExposureMode": 0,
+    "AeMeteringMode": 0,
+    "ExposureTime": 0,  # Let camera auto-select
+    "AnalogueGain": 1.0,  # Start with low gain for less noise
+    "Brightness": 0.0,  # Neutral
+    "Contrast": 1.2,    # Slightly higher for sharper edges
+    "Saturation": 1.2,  # Slightly higher for more color
+    "FrameRate": TARGET_FPS,
+    "AeConstraintMode": 0,
+    "AwbMode": 1,
+    "ExposureValue": 0.0,
+    "NoiseReductionMode": 2
 }
 
 # Video Recording Settings
@@ -59,7 +68,7 @@ RECORD_FPS = 30
 RECORD_FILENAME = "squirrel_detection_test.mp4"
 
 # Detection Settings
-DETECTION_THRESHOLD = 0.30
+DETECTION_THRESHOLD = 0.60
 MODEL_INPUT_SIZE = (640, 640)
 CLASSES_TO_DETECT = [0]  # Only one class: squirrel
 
