@@ -16,7 +16,7 @@ from pprint import pprint
 MODEL_NAME = "yolov8n_squirrel--640x640_quant_hailort_hailo8l_1"
 MODEL_ZOO_PATH = "/home/pi5/degirum_model_zoo"
 DETECTION_THRESHOLD = 0.3
-INPUT_VIDEO_PATH = "/home/pi5/Downloads/squirrel-test.mp4"
+INPUT_VIDEO_PATH = "/home/pi5/Downloads/squirrel_distance_test.mp4"
 OUTPUT_VIDEO_PATH = "debug_squirrel_output.mp4"
 
 # Squirrel class ID (should match your model)
