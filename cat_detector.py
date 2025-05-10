@@ -405,39 +405,25 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
         x2 = max(0, min(x2, width - 1))
         y2 = max(0, min(y2, height - 1))
         
-        # Draw bounding box
-        cv2.rectangle(display_frame, (x1, y1), (x2, y2), COLOR_BLUE, 2)
+        # Draw bounding box with thicker line
+        cv2.rectangle(display_frame, (x1, y1), (x2, y2), COLOR_BLUE, 3)
         
         # Draw label with confidence
         text = f"{label}: {score:.2f}"
-        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
         text_x = x1
-        text_y = y1 - 5 if y1 > 20 else y1 + 20  # Adjust text position if too close to top
+        text_y = y1 - 10 if y1 > 30 else y1 + 30  # Adjust text position if too close to top
         
-        # Draw text background
+        # Draw text background with padding
+        padding = 5
         cv2.rectangle(display_frame, 
-                     (text_x, text_y - text_size[1] - 5),
-                     (text_x + text_size[0], text_y + 5),
+                     (text_x - padding, text_y - text_size[1] - padding),
+                     (text_x + text_size[0] + padding, text_y + padding),
                      COLOR_BLUE, -1)
         
         # Draw text
         cv2.putText(display_frame, text, (text_x, text_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 2)
-        
-        # Check if this detection would trigger squirt
-        if label.lower() == 'cat' and score >= DETECTION_THRESHOLD:
-            # Calculate if object is in center zone
-            center_x_obj = (x1 + x2) / 2
-            normalized_center = center_x_obj / width
-            error = abs(normalized_center - 0.5)
-            
-            if error <= PD_CENTER_THRESHOLD:
-                # Draw "SQUIRT" text in red at the top of the frame
-                squirt_text = "SQUIRT!"
-                text_size = cv2.getTextSize(squirt_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3)[0]
-                text_x = (width - text_size[0]) // 2
-                cv2.putText(display_frame, squirt_text, (text_x, 50),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.5, COLOR_RED, 3)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, COLOR_WHITE, 2)
     
     # Draw error indicator
     if current_error is not None:
@@ -450,7 +436,7 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
         cv2.putText(display_frame, error_text, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_WHITE, 2)
         
-        # Show movement status
+        # Show movement status with larger text
         if abs(current_error) > PD_CENTER_THRESHOLD:
             if current_error > 0:
                 move_text = "MOVE LEFT"
@@ -458,19 +444,45 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
             else:
                 move_text = "MOVE RIGHT"
                 text_color = COLOR_RED
-            cv2.putText(display_frame, move_text, (width - 150, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, text_color, 2)
+            
+            # Draw movement text in center of screen with large font
+            text_size = cv2.getTextSize(move_text, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 3)[0]
+            text_x = (width - text_size[0]) // 2
+            text_y = height // 2
+            cv2.putText(display_frame, move_text, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.0, text_color, 3)
     
     # Draw FPS
     fps_text = f"FPS: {fps:.1f}"
     cv2.putText(display_frame, fps_text, (width - 100, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_GREEN, 2)
     
-    # Draw last action
+    # Draw last action with larger text if recent
     if time.time() - last_action_time < 2.0:
         action_text = f"Last: {last_action}"
-        cv2.putText(display_frame, action_text, (10, height - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_YELLOW, 2)
+        text_size = cv2.getTextSize(action_text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+        text_x = (width - text_size[0]) // 2
+        text_y = height - 50
+        
+        # Draw text background
+        padding = 10
+        cv2.rectangle(display_frame,
+                     (text_x - padding, text_y - text_size[1] - padding),
+                     (text_x + text_size[0] + padding, text_y + padding),
+                     COLOR_YELLOW, -1)
+        
+        # Draw text
+        cv2.putText(display_frame, action_text, (text_x, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, COLOR_WHITE, 2)
+        
+        # If it's a squirt action, show large SQUIRT text
+        if "SQUIRT" in last_action:
+            squirt_text = "SQUIRT!"
+            text_size = cv2.getTextSize(squirt_text, cv2.FONT_HERSHEY_SIMPLEX, 3.0, 4)[0]
+            text_x = (width - text_size[0]) // 2
+            text_y = height // 3
+            cv2.putText(display_frame, squirt_text, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 3.0, COLOR_RED, 4)
     
     return display_frame
 
