@@ -34,11 +34,11 @@ except ImportError:
         'unused': 15  # Unused relay
     }
     RELAY_ACTIVE_LOW = True
-    PD_CENTER_THRESHOLD = 0.08
-    PD_KP = 0.15
+    PD_CENTER_THRESHOLD = 0.12  # Increased from 0.08 to allow more movement
+    PD_KP = 0.25  # Increased from 0.15 for stronger movement
     PD_KD = 0.02
     PD_MIN_PULSE = 0.01
-    PD_MAX_PULSE = 0.04
+    PD_MAX_PULSE = 0.06  # Increased from 0.04 to allow longer movement pulses
     PD_MOVEMENT_COOLDOWN = 0.8
 
 # Camera Settings
