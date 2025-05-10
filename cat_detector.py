@@ -417,7 +417,7 @@ def draw_terminator_overlay(frame, frame_count):
     for row in range(TERMINATOR_ANALYSIS_ROWS):
         nums = [str(random.randint(10**(TERMINATOR_ANALYSIS_DIGITS-1), 10**TERMINATOR_ANALYSIS_DIGITS-1)) for _ in range(TERMINATOR_ANALYSIS_COLS)]
         text = " ".join(nums)
-        cv2.putText(overlay, text, (x0, y0 + (row+1)*line_height), cv2.FONT_HERSHEY_MONOSPACE, 0.7, (255,255,255), 1)
+        cv2.putText(overlay, text, (x0, y0 + (row+1)*line_height), cv2.FONT_HERSHEY_PLAIN, 0.7, (255,255,255), 1)
     # Right: cycling status text
     right_text_idx = (frame_count // 30) % len(TERMINATOR_RIGHT_TEXT)
     right_text = TERMINATOR_RIGHT_TEXT[right_text_idx]
