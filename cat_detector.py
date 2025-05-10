@@ -18,6 +18,8 @@ from picamera2 import Picamera2
 import degirum as dg
 import threading
 import select
+import random
+import itertools
 
 # Import relay configuration
 try:
@@ -104,6 +106,20 @@ running = True
 camera = None
 model = None
 gpio_available = False  # Flag to track if GPIO is available
+TERMINATOR_MODE = False
+TERMINATOR_RIGHT_TEXT = [
+    "SCAN MODE: 43894",
+    "SIZE ASSESSMENT",
+    "ASSESSMENT COMPLETE",
+    "FIT PROBABILITY 0.99",
+    "PRIORITY OVERRIDE",
+    "DEFENSE SYSTEMS SET",
+    "ACTIVE STATUS",
+    "LEVEL 2347923 MAX"
+]
+TERMINATOR_ANALYSIS_ROWS = 8
+TERMINATOR_ANALYSIS_COLS = 4
+TERMINATOR_ANALYSIS_DIGITS = 8
 
 def get_user_confidence_threshold():
     """Prompt user for confidence threshold."""
@@ -115,6 +131,14 @@ def get_user_confidence_threshold():
             print("Please enter a value between 0.0 and 1.0")
         except ValueError:
             print("Please enter a valid number")
+
+def get_user_terminator_mode():
+    """Prompt user for Terminator mode."""
+    while True:
+        resp = input("Enable Terminator mode? (y/n): ").strip().lower()
+        if resp in ("y", "yes"): return True
+        if resp in ("n", "no"): return False
+        print("Please enter 'y' or 'n'.")
 
 def setup_gpio():
     """Initialize GPIO pins for relays."""
@@ -378,10 +402,39 @@ def handle_tracking(bbox, frame_width):
     
     return current_error
 
-def draw_frame_elements(frame, fps, detections, current_error=None):
-    """Draw tracking information on the frame."""
+def draw_terminator_overlay(frame, frame_count):
+    """Apply red tint and overlay Terminator-style text and numbers."""
     height, width = frame.shape[:2]
-    display_frame = frame.copy()
+    # Red tint: convert to grayscale, then colorize
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    red_tint = cv2.merge((gray//4, gray//4, gray))
+    overlay = red_tint.copy()
+    # Left: ANALYSIS and random numbers
+    x0 = 20
+    y0 = 40
+    line_height = 28
+    cv2.putText(overlay, "ANALYSIS:", (x0, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+    for row in range(TERMINATOR_ANALYSIS_ROWS):
+        nums = [str(random.randint(10**(TERMINATOR_ANALYSIS_DIGITS-1), 10**TERMINATOR_ANALYSIS_DIGITS-1)) for _ in range(TERMINATOR_ANALYSIS_COLS)]
+        text = " ".join(nums)
+        cv2.putText(overlay, text, (x0, y0 + (row+1)*line_height), cv2.FONT_HERSHEY_MONOSPACE, 0.7, (255,255,255), 1)
+    # Right: cycling status text
+    right_text_idx = (frame_count // 30) % len(TERMINATOR_RIGHT_TEXT)
+    right_text = TERMINATOR_RIGHT_TEXT[right_text_idx]
+    x1 = width - 420
+    y1 = 60
+    cv2.putText(overlay, right_text, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,255), 2)
+    return overlay
+
+def draw_frame_elements(frame, fps, detections, current_error=None, frame_count=0):
+    """Draw tracking information on the frame. In Terminator mode, apply red tint and themed overlays."""
+    if TERMINATOR_MODE:
+        display_frame = draw_terminator_overlay(frame, frame_count)
+        # Draw bounding boxes and labels as usual, but on the red-tinted frame
+        # (rest of function is unchanged, but use display_frame instead of frame)
+    else:
+        display_frame = frame.copy()
+    height, width = display_frame.shape[:2]
     
     # Draw center line
     center_x = width // 2
@@ -524,7 +577,7 @@ def signal_handler(sig, frame):
 
 def main():
     """Main function for cat detection and squirting."""
-    global running, camera, model, previous_error
+    global running, camera, model, previous_error, TERMINATOR_MODE
     
     # Register signal handler
     signal.signal(signal.SIGINT, signal_handler)
@@ -532,9 +585,11 @@ def main():
     print("\n=== Cat Detection and Squirting System ===")
     print("Press Ctrl+C to exit.")
     
-    # Get user input for confidence threshold
+    # Get user input for confidence threshold and Terminator mode
     DETECTION_THRESHOLD = get_user_confidence_threshold()
+    TERMINATOR_MODE = get_user_terminator_mode()
     print(f"Using confidence threshold: {DETECTION_THRESHOLD}")
+    print(f"Terminator mode: {'ENABLED' if TERMINATOR_MODE else 'DISABLED'}")
     
     try:
         # Initialize hardware
@@ -590,6 +645,7 @@ def main():
         video_writer = cv2.VideoWriter(RECORD_FILENAME, fourcc, RECORD_FPS, (FRAME_WIDTH, FRAME_HEIGHT))
         recording_start_time = time.time()
         
+        frame_count = 0
         while running:
             try:
                 # Check if recording duration has elapsed
@@ -667,7 +723,8 @@ def main():
                     last_fps_print_time = time.time()
                 
                 # Draw visualization
-                display_frame = draw_frame_elements(frame, current_fps, detections, current_error)
+                display_frame = draw_frame_elements(frame, current_fps, detections, current_error, frame_count)
+                frame_count += 1
                 
                 # Write frame to video
                 video_writer.write(display_frame)
