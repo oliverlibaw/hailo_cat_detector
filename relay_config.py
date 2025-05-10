@@ -20,7 +20,7 @@ SQUIRT_RELAY_ON_STATE = 1    # GPIO.HIGH (1) to activate
 SQUIRT_RELAY_OFF_STATE = 0   # GPIO.LOW (0) to deactivate
 
 # PD Control Parameters (Adjust after testing)
-PD_CENTER_THRESHOLD = 0.10   # Dead zone around center (+/- %) - INCREASED for stability
+PD_CENTER_THRESHOLD = 0.15   # Dead zone around center (+/- %) - INCREASED for stability
 PD_KP = 0.60                 # Proportional gain
 PD_KD = 0.10                 # Derivative gain
 PD_MIN_PULSE = 0.01          # Minimum effective pulse duration (seconds)
