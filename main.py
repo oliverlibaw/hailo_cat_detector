@@ -73,7 +73,7 @@ timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 RECORD_FILENAME = os.path.join(VIDEOS_DIR, f"squirrel_detection_{timestamp}.mp4")
 
 # Detection Settings
-DETECTION_THRESHOLD = 0.60
+DETECTION_THRESHOLD = 0.60  # Default value, will be overridden by user input
 MODEL_INPUT_SIZE = (640, 640)
 CLASSES_TO_DETECT = [0]  # Only one class: squirrel
 
@@ -370,6 +370,17 @@ def handle_tracking(bbox, frame_width):
     
     return current_error
 
+def get_user_confidence_threshold():
+    """Prompt user for confidence threshold."""
+    while True:
+        try:
+            threshold = float(input("Enter minimum confidence threshold (0.0 to 1.0): "))
+            if 0.0 <= threshold <= 1.0:
+                return threshold
+            print("Please enter a value between 0.0 and 1.0")
+        except ValueError:
+            print("Please enter a valid number")
+
 def draw_frame_elements(frame, fps, detections, current_error=None):
     """Draw tracking information on the frame."""
     height, width = frame.shape[:2]
@@ -452,13 +463,16 @@ def draw_frame_elements(frame, fps, detections, current_error=None):
             if current_error > 0:
                 move_text = "MOVE LEFT"
                 text_color = COLOR_RED
+                # Position text on the left side
+                text_x = 50
             else:
                 move_text = "MOVE RIGHT"
                 text_color = COLOR_RED
+                # Position text on the right side
+                text_size = cv2.getTextSize(move_text, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 3)[0]
+                text_x = width - text_size[0] - 50
             
-            # Draw movement text in center of screen with large font
-            text_size = cv2.getTextSize(move_text, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 3)[0]
-            text_x = (width - text_size[0]) // 2
+            # Draw movement text with large font
             text_y = height // 2
             cv2.putText(display_frame, move_text, (text_x, text_y),
                         cv2.FONT_HERSHEY_SIMPLEX, 2.0, text_color, 3)
@@ -539,14 +553,17 @@ def signal_handler(sig, frame):
 
 def main():
     """Main function for squirrel detection and squirting."""
-    global running, camera, model, previous_error
+    global running, camera, model, previous_error, DETECTION_THRESHOLD
     
     # Register signal handler
     signal.signal(signal.SIGINT, signal_handler)
     
     print("\n=== Squirrel Detection and Squirting System ===")
     print("Press Ctrl+C to exit.")
-    print(f"Video will be saved to: {RECORD_FILENAME}")
+    
+    # Get user input for confidence threshold
+    DETECTION_THRESHOLD = get_user_confidence_threshold()
+    print(f"Using confidence threshold: {DETECTION_THRESHOLD}")
     
     try:
         # Initialize hardware
