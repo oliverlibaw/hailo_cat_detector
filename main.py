@@ -67,7 +67,7 @@ CAMERA_SETTINGS = {
 # Video Recording Settings
 RECORD_DURATION = 60  # seconds
 RECORD_FPS = 30
-VIDEOS_DIR = "/home/pi/videos"  # Save in Pi's home directory
+VIDEOS_DIR = os.path.expanduser("~/videos")  # Use current user's home directory
 os.makedirs(VIDEOS_DIR, exist_ok=True)
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 RECORD_FILENAME = os.path.join(VIDEOS_DIR, f"squirrel_detection_{timestamp}.mp4")
