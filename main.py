@@ -67,7 +67,10 @@ CAMERA_SETTINGS = {
 # Video Recording Settings
 RECORD_DURATION = 60  # seconds
 RECORD_FPS = 30
-RECORD_FILENAME = "squirrel_detection_test.mp4"
+VIDEOS_DIR = "/home/pi/videos"  # Save in Pi's home directory
+os.makedirs(VIDEOS_DIR, exist_ok=True)
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+RECORD_FILENAME = os.path.join(VIDEOS_DIR, f"squirrel_detection_{timestamp}.mp4")
 
 # Detection Settings
 DETECTION_THRESHOLD = 0.60
@@ -508,6 +511,7 @@ def main():
     
     print("\n=== Squirrel Detection and Squirting System ===")
     print("Press Ctrl+C to exit.")
+    print(f"Video will be saved to: {RECORD_FILENAME}")
     
     try:
         # Initialize hardware
