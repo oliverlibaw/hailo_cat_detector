@@ -34,6 +34,8 @@ except ImportError:
         'unused': 15  # Unused relay
     }
     RELAY_ACTIVE_LOW = True
+    SQUIRT_RELAY_ON_STATE = GPIO.LOW if RELAY_ACTIVE_LOW else GPIO.HIGH
+    SQUIRT_RELAY_OFF_STATE = GPIO.HIGH if RELAY_ACTIVE_LOW else GPIO.LOW
     PD_CENTER_THRESHOLD = 0.08
     PD_KP = 0.15
     PD_KD = 0.02
@@ -647,8 +649,7 @@ def main():
                 # Write frame to video
                 video_writer.write(display_frame)
                 
-                # Show frame
-                cv2.imshow("Tracking", display_frame)
+                # Don't show live video, just record
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     running = False
                     
